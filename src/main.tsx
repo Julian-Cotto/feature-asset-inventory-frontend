@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import App from "./App";
+import { ConfirmProvider } from "./components/ConfirmProvider";
 import { FeatureAuthProvider } from "./platform/authProvider";
 
 if (import.meta.env.DEV && typeof window !== "undefined") {
@@ -40,7 +41,9 @@ if (!rootElement) throw new Error("Root element not found.");
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
     <FeatureAuthProvider>
-      <App />
+      <ConfirmProvider>
+        <App />
+      </ConfirmProvider>
     </FeatureAuthProvider>
   </React.StrictMode>
 );

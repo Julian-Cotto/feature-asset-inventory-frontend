@@ -6,10 +6,17 @@ import {
   changeAssetStatus,
   getAsset,
   getAssetHistory,
+  getIntunePortalUrl,
   listLocations,
   listStatuses,
+  syncAssetFromIntune,
   unassignAsset,
+  updateAsset,
 } from "../services/inventory";
+import { useConfirm } from "../components/ConfirmProvider";
+import Select from "../components/Select";
+import { friendlyModel } from "../utils/friendlyModel";
+import { osDisplay } from "../utils/osDisplay";
 import type {
   Asset,
   AssetHistoryEntry,
@@ -32,6 +39,11 @@ export default function AssetDetail({ assetId, onBack }: Props) {
   const [assignUpn, setAssignUpn] = useState("");
   const [assignLoc, setAssignLoc] = useState<number | "">("");
   const [statusTo, setStatusTo] = useState("");
+  const [intuneSyncing, setIntuneSyncing] = useState(false);
+  const [intuneMessage, setIntuneMessage] = useState<string | null>(null);
+  const [overrideModelDraft, setOverrideModelDraft] = useState("");
+  const [savingOverride, setSavingOverride] = useState(false);
+  const confirm = useConfirm();
 
   const reload = async () => {
     try {
@@ -39,6 +51,7 @@ export default function AssetDetail({ assetId, onBack }: Props) {
       setAsset(a);
       setHistory(h);
       setStatusTo(a.status_code);
+      setOverrideModelDraft(a.override_model ?? "");
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
@@ -55,25 +68,103 @@ export default function AssetDetail({ assetId, onBack }: Props) {
       .catch((e) => setError(e.message));
   }, [assetId]);
 
-  if (error) return <p style={{ color: "crimson" }}>{error}</p>;
-  if (!asset) return <p>Loading…</p>;
+  if (error) return <div className="alert alert-error">{error}</div>;
+  if (!asset) return <p className="text-muted">Loading…</p>;
 
   const isArchived = asset.archived_at !== null;
+  const isComputer =
+    asset.asset_type === "laptop" ||
+    asset.asset_type === "desktop" ||
+    asset.asset_type === "thin_client";
+
+  async function handleIntuneSync() {
+    if (!asset) return;
+    setIntuneSyncing(true);
+    setIntuneMessage(null);
+    try {
+      const res = await syncAssetFromIntune(asset.id);
+      if (!res.found) {
+        setIntuneMessage("Not found in Intune. The device may not have enrolled yet.");
+      } else if (res.changed.length === 0) {
+        setIntuneMessage("In Intune. No new fields to update.");
+      } else {
+        setIntuneMessage(`Synced from Intune. Updated: ${res.changed.join(", ")}`);
+      }
+      void reload();
+    } catch (e) {
+      setIntuneMessage(e instanceof Error ? e.message : "Intune sync failed");
+    } finally {
+      setIntuneSyncing(false);
+    }
+  }
+
+  async function handleViewInIntune() {
+    if (!asset) return;
+    try {
+      const { url } = await getIntunePortalUrl(asset.id);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setIntuneMessage(e instanceof Error ? e.message : "Could not get Intune URL");
+    }
+  }
 
   return (
     <div>
-      <button onClick={onBack}>← Back</button>
-      <h2>
+      <div className="cluster" style={{ justifyContent: "space-between" }}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onBack}>
+          ← Back
+        </button>
+        {isComputer && !isArchived && (
+          <div className="cluster">
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => void handleIntuneSync()}
+              disabled={intuneSyncing}
+            >
+              {intuneSyncing ? "Syncing…" : "Sync from Intune"}
+            </button>
+            {asset.intune_id && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => void handleViewInIntune()}
+              >
+                View in Intune ↗
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {intuneMessage && (
+        <div className="alert alert-info mt-2">{intuneMessage}</div>
+      )}
+
+      <h2 className="heading-2 mt-3">
         {asset.asset_tag ?? asset.serial_number}{" "}
-        <small style={{ color: "#666" }}>({asset.asset_type})</small>
+        <span className="text-muted text-sm">({asset.asset_type})</span>
       </h2>
+
+      {asset.intune_synced_at && (
+        <p className="text-muted text-xs">
+          Last Intune sync: {new Date(asset.intune_synced_at).toLocaleString()}
+        </p>
+      )}
 
       <Grid>
         <KV k="Serial" v={asset.serial_number} mono />
         <KV k="Status" v={asset.status_code} />
         <KV k="Manufacturer" v={asset.manufacturer ?? "—"} />
-        <KV k="Model" v={asset.model ?? "—"} />
-        <KV k="OS" v={`${asset.os ?? "—"} ${asset.os_version ?? ""}`} />
+        <KV k="Model" v={friendlyModel(asset)} />
+        {asset.model && asset.model !== friendlyModel(asset) && (
+          <KV k="Raw model" v={asset.model} mono />
+        )}
+        <KV
+          k="OS"
+          v={asset.os ? osDisplay(asset.os, asset.os_version) : "—"}
+          title={asset.os_version ?? undefined}
+        />
         <KV k="Assigned" v={asset.assigned_upn ?? "—"} />
         <KV
           k="Location"
@@ -88,127 +179,268 @@ export default function AssetDetail({ assetId, onBack }: Props) {
         {isArchived && <KV k="Archived" v={asset.archived_at!} />}
       </Grid>
 
+      {isComputer && asset.intune_id && (
+        <section className="card mt-4">
+          <div className="card-header">
+            <span className="eyebrow">Intune</span>
+          </div>
+          <div className="card-body">
+            <Grid>
+              <KV k="Device name" v={asset.intune_device_name ?? "—"} />
+              <KV k="Managed by" v={asset.intune_managed_by ?? "—"} />
+              <KV k="Ownership" v={asset.intune_ownership ?? "—"} />
+              <KV k="Compliance" v={asset.intune_compliance ?? "—"} />
+              <KV k="Primary user" v={asset.assigned_upn ?? "—"} />
+              <KV
+                k="Last check-in"
+                v={
+                  asset.intune_last_check_in
+                    ? new Date(asset.intune_last_check_in).toLocaleString()
+                    : "—"
+                }
+              />
+            </Grid>
+          </div>
+        </section>
+      )}
+
       {!isArchived && (
-        <>
-          <h3>Assign</h3>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <input
-              placeholder="user@upn"
-              value={assignUpn}
-              onChange={(e) => setAssignUpn(e.target.value)}
-            />
-            <select
-              value={assignLoc}
-              onChange={(e) =>
-                setAssignLoc(e.target.value === "" ? "" : Number(e.target.value))
-              }
-            >
-              <option value="">— location —</option>
-              {locations.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={async () => {
-                await assignAsset(asset.id, {
-                  assigned_upn: assignUpn || undefined,
-                  location_id: assignLoc === "" ? undefined : Number(assignLoc),
-                });
-                setAssignUpn("");
-                setAssignLoc("");
-                void reload();
-              }}
-              disabled={!assignUpn && assignLoc === ""}
-            >
-              Assign
-            </button>
-            {asset.assigned_upn && (
+        <div className="stack-lg mt-6">
+          <section className="card">
+            <div className="card-header">
+              <h3 className="heading-3">Override model name</h3>
+            </div>
+            <div className="card-body stack">
+              <p className="text-muted text-sm">
+                Set a custom display name for this asset's model. Wins over
+                Lenovo's friendly name and the raw model code. Leave blank to
+                use the auto-detected name.
+              </p>
+              <div className="form-row">
+                <Field label="Override model">
+                  <input
+                    className="input"
+                    value={overrideModelDraft}
+                    onChange={(e) => setOverrideModelDraft(e.target.value)}
+                    placeholder="e.g. Pricing Team Workstation"
+                  />
+                </Field>
+                <Field label=" ">
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={
+                      savingOverride ||
+                      overrideModelDraft.trim() === (asset.override_model ?? "")
+                    }
+                    onClick={async () => {
+                      setSavingOverride(true);
+                      try {
+                        await updateAsset(asset.id, {
+                          override_model: overrideModelDraft.trim() || null,
+                        });
+                        await reload();
+                      } catch (e) {
+                        setError(e instanceof Error ? e.message : "Save failed");
+                      } finally {
+                        setSavingOverride(false);
+                      }
+                    }}
+                  >
+                    {savingOverride ? "Saving…" : "Save"}
+                  </button>
+                </Field>
+              </div>
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="card-header">
+              <h3 className="heading-3">Assign</h3>
+            </div>
+            <div className="card-body stack">
+              <div className="form-row">
+                <Field label="User UPN">
+                  <input
+                    className="input"
+                    placeholder="user@upn"
+                    value={assignUpn}
+                    onChange={(e) => setAssignUpn(e.target.value)}
+                  />
+                </Field>
+                <Field label="Location">
+                  <Select
+                    value={assignLoc === "" ? "" : String(assignLoc)}
+                    onChange={(v) => setAssignLoc(v === "" ? "" : Number(v))}
+                    placeholder="— location —"
+                    options={[
+                      { value: "", label: "— location —" },
+                      ...locations.map((l) => ({
+                        value: String(l.id),
+                        label: l.name,
+                      })),
+                    ]}
+                  />
+                </Field>
+              </div>
+              <div className="cluster">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={async () => {
+                    await assignAsset(asset.id, {
+                      assigned_upn: assignUpn || undefined,
+                      location_id: assignLoc === "" ? undefined : Number(assignLoc),
+                    });
+                    setAssignUpn("");
+                    setAssignLoc("");
+                    void reload();
+                  }}
+                  disabled={!assignUpn && assignLoc === ""}
+                >
+                  Assign
+                </button>
+                {asset.assigned_upn && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={async () => {
+                      await unassignAsset(asset.id);
+                      void reload();
+                    }}
+                  >
+                    Unassign
+                  </button>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="card-header">
+              <h3 className="heading-3">Change status</h3>
+            </div>
+            <div className="card-body cluster">
+              <div style={{ minWidth: 200, maxWidth: 240 }}>
+                <Select
+                  value={statusTo}
+                  onChange={setStatusTo}
+                  options={statuses.map((s) => ({
+                    value: s.code,
+                    label: s.label,
+                  }))}
+                />
+              </div>
               <button
+                type="button"
+                className="btn btn-primary btn-sm"
                 onClick={async () => {
-                  await unassignAsset(asset.id);
+                  await changeAssetStatus(asset.id, { status_code: statusTo });
+                  void reload();
+                }}
+                disabled={statusTo === asset.status_code}
+              >
+                Update status
+              </button>
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="card-header">
+              <h3 className="heading-3">Archive / offboard</h3>
+            </div>
+            <div className="card-body">
+              <button
+                type="button"
+                className="btn btn-danger btn-sm"
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: "Archive asset?",
+                    message: "Archived assets are removed from active inventory.",
+                    tone: "danger",
+                    confirmLabel: "Archive",
+                  });
+                  if (!ok) return;
+                  await archiveAsset(asset.id);
                   void reload();
                 }}
               >
-                Unassign
+                Archive asset
               </button>
-            )}
-          </div>
-
-          <h3>Change status</h3>
-          <div style={{ display: "flex", gap: 8 }}>
-            <select
-              value={statusTo}
-              onChange={(e) => setStatusTo(e.target.value)}
-            >
-              {statuses.map((s) => (
-                <option key={s.code} value={s.code}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={async () => {
-                await changeAssetStatus(asset.id, { status_code: statusTo });
-                void reload();
-              }}
-              disabled={statusTo === asset.status_code}
-            >
-              Update status
-            </button>
-          </div>
-
-          <h3>Archive / offboard</h3>
-          <button
-            style={{ background: "#fee", color: "#a00", padding: "6px 12px" }}
-            onClick={async () => {
-              if (!confirm("Archive this asset?")) return;
-              await archiveAsset(asset.id);
-              void reload();
-            }}
-          >
-            Archive asset
-          </button>
-        </>
+            </div>
+          </section>
+        </div>
       )}
 
-      <h3 style={{ marginTop: 24 }}>History</h3>
-      <ul>
-        {history.map((h) => (
-          <li key={h.id}>
-            <code>{h.performed_at}</code> — <strong>{h.event_type}</strong>{" "}
-            {h.from_value !== null && <>from <code>{h.from_value}</code> </>}
-            {h.to_value !== null && <>to <code>{h.to_value}</code> </>}
-            by {h.performed_by_upn ?? "—"}
-            {h.notes ? ` (${h.notes})` : ""}
-          </li>
-        ))}
-      </ul>
+      <section className="stack mt-6">
+        <h3 className="heading-3">History</h3>
+        {history.length === 0 ? (
+          <p className="text-muted text-sm">No history yet.</p>
+        ) : (
+          <ul className="list-clean stack">
+            {history.map((h) => (
+              <li key={h.id} className="card card-body">
+                <div className="cluster" style={{ justifyContent: "space-between" }}>
+                  <div className="cluster">
+                    <span className="badge">{h.event_type}</span>
+                    {h.from_value !== null && (
+                      <span className="text-muted text-xs">
+                        from <code className="text-mono">{h.from_value}</code>
+                      </span>
+                    )}
+                    {h.to_value !== null && (
+                      <span className="text-muted text-xs">
+                        to <code className="text-mono">{h.to_value}</code>
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-muted text-xs">
+                    {new Date(h.performed_at).toLocaleString()}
+                  </span>
+                </div>
+                <div className="text-muted text-xs mt-1">
+                  by {h.performed_by_upn ?? "—"}
+                  {h.notes ? ` · ${h.notes}` : ""}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }
 
-function Grid({ children }: { children: React.ReactNode }) {
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))",
-        gap: 8,
-        margin: "12px 0",
-      }}
-    >
+    <div className="field">
+      <label className="label">{label}</label>
       {children}
     </div>
   );
 }
 
-function KV({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
+function Grid({ children }: { children: React.ReactNode }) {
+  return <div className="grid-3 mt-3">{children}</div>;
+}
+
+function KV({
+  k,
+  v,
+  mono,
+  title,
+}: {
+  k: string;
+  v: string;
+  mono?: boolean;
+  title?: string;
+}) {
   return (
-    <div>
-      <div style={{ fontSize: 12, color: "#666" }}>{k}</div>
-      <div style={{ fontFamily: mono ? "monospace" : undefined }}>{v}</div>
+    <div className="stack" style={{ gap: 2 }}>
+      <span className="eyebrow">{k}</span>
+      <span className={mono ? "text-mono" : "text-text"} title={title}>
+        {v}
+      </span>
     </div>
   );
 }

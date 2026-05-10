@@ -1,7 +1,4 @@
-import { Html5Qrcode } from "html5-qrcode";
 import { useCallback, useEffect, useRef, useState } from "react";
-
-import { SCANNER_CONFIG } from "./scanFormats";
 
 interface Props {
   onResult: (text: string) => void;
@@ -25,6 +22,16 @@ const NATIVE_FORMATS = [
   "aztec",
   "pdf417",
 ];
+
+/**
+ * Ensure window.BarcodeDetector exists. On Android Chrome the native API is
+ * already there — polyfill detects that and is a no-op (zero runtime cost).
+ * Other browsers get a WASM-backed implementation (ZXing-cpp).
+ */
+async function ensureBarcodeDetector(): Promise<void> {
+  if (typeof window.BarcodeDetector === "function") return;
+  await import("barcode-detector/polyfill");
+}
 
 interface BoundingBox {
   x: number;
@@ -118,13 +125,11 @@ export default function CameraScanner({ onResult, onClose }: Props) {
       stream: MediaStream | null;
       video: HTMLVideoElement | null;
       rafId: number;
-      h5qrInst: Html5Qrcode | null;
     } = {
       cancelled: false,
       stream: null,
       video: null,
       rafId: 0,
-      h5qrInst: null,
     };
 
     const releaseStream = (s: MediaStream | null) => {
@@ -132,6 +137,10 @@ export default function CameraScanner({ onResult, onClose }: Props) {
     };
 
     const startNative = async () => {
+      setStatus("Loading scanner…");
+      await ensureBarcodeDetector();
+      if (ctx.cancelled) return;
+
       setStatus("Requesting camera…");
       const acquired = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -147,9 +156,26 @@ export default function CameraScanner({ onResult, onClose }: Props) {
       }
       ctx.stream = acquired;
 
+      // Best-effort continuous focus where supported (Android Chrome honours,
+      // iOS Safari currently ignores). Wrapped in try/catch — applyConstraints
+      // throws if focusMode isn't a known constraint on the track.
+      try {
+        const track = acquired.getVideoTracks()[0];
+        if (track) {
+          await track.applyConstraints({
+            advanced: [{ focusMode: "continuous" } as MediaTrackConstraintSet],
+          });
+        }
+      } catch {
+        /* not supported — ignore */
+      }
+
       const v = document.createElement("video");
       v.setAttribute("playsinline", "");
+      v.setAttribute("autoplay", "");
+      v.setAttribute("muted", "");
       v.muted = true;
+      v.autoplay = true;
       v.srcObject = acquired;
       v.style.width = "100%";
       v.style.borderRadius = "4px";
@@ -319,44 +345,6 @@ export default function CameraScanner({ onResult, onClose }: Props) {
       ctx.rafId = requestAnimationFrame(tick);
     };
 
-    const startFallback = async () => {
-      setStatus("Requesting camera permission…");
-      const inst = new Html5Qrcode(TARGET_ID, SCANNER_CONFIG as never);
-      ctx.h5qrInst = inst;
-      const startConfig = { fps: 15, qrbox: { width: 280, height: 120 } };
-      const decode = (text: string) => {
-        setTipTone("good");
-        setTip(`Detected: ${text}`);
-        setTimeout(() => onResultRef.current(text), 120);
-      };
-      const tryStart = (src: { facingMode: string } | string) =>
-        inst.start(src, startConfig, decode, () => {});
-      try {
-        await tryStart({ facingMode: "environment" });
-      } catch {
-        try {
-          await tryStart({ facingMode: "user" });
-        } catch {
-          const cams = await Html5Qrcode.getCameras();
-          if (!cams?.length) throw new Error("No camera devices.");
-          await tryStart(cams[0].id);
-        }
-      }
-      if (ctx.cancelled) {
-        try {
-          await inst.stop();
-          inst.clear();
-        } catch {
-          /* noop */
-        }
-        ctx.h5qrInst = null;
-        return;
-      }
-      setStatus("");
-      setTipTone("info");
-      setTip("Hold barcode horizontally inside the green box");
-    };
-
     (async () => {
       try {
         if (!window.isSecureContext) {
@@ -365,11 +353,7 @@ export default function CameraScanner({ onResult, onClose }: Props) {
         if (!navigator.mediaDevices?.getUserMedia) {
           throw new Error("getUserMedia not supported by this browser.");
         }
-        if (typeof window.BarcodeDetector === "function") {
-          await startNative();
-        } else {
-          await startFallback();
-        }
+        await startNative();
       } catch (err) {
         if (!ctx.cancelled) {
           setError(err instanceof Error ? err.message : String(err));
@@ -387,51 +371,53 @@ export default function CameraScanner({ onResult, onClose }: Props) {
       }
       ctx.video = null;
       videoRef.current = null;
-      if (ctx.h5qrInst) {
-        const inst = ctx.h5qrInst;
-        ctx.h5qrInst = null;
-        void (async () => {
-          try {
-            await inst.stop();
-            inst.clear();
-          } catch {
-            /* noop */
-          }
-        })();
-      }
     };
   }, []);
 
-  const tipColor =
-    tipTone === "good" ? "#0a7" : tipTone === "warn" ? "#e80" : "#06c";
+  // Backdrop click: only close if mousedown AND mouseup both fire on backdrop.
+  // Prevents accidentally closing when a drag (e.g. resizing scan zone) ends
+  // outside the panel.
+  const downOnBackdropRef = useRef(false);
+
+  // Esc to close
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCloseRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const tipToneClass =
+    tipTone === "good"
+      ? "text-success"
+      : tipTone === "warn"
+        ? "text-warning"
+        : "text-primary";
 
   return (
     <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.78)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Scan barcode or QR code"
+      onMouseDown={(e) => {
+        downOnBackdropRef.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={(e) => {
+        if (downOnBackdropRef.current && e.target === e.currentTarget) {
+          onCloseRef.current();
+        }
+        downOnBackdropRef.current = false;
       }}
     >
-      <div
-        style={{
-          background: "#fff",
-          padding: 16,
-          borderRadius: 8,
-          width: 420,
-          maxWidth: "94vw",
-        }}
-      >
-        <h3 style={{ marginTop: 0 }}>Scan barcode / QR</h3>
-        <div style={{ position: "relative", width: "100%", minHeight: 250 }}>
+      <div className="modal-panel" onMouseDown={(e) => e.stopPropagation()}>
+        <h3 className="modal-title">Scan barcode / QR</h3>
+        <div className="relative w-full min-h-[250px]">
           <div
             ref={containerRef}
             id={TARGET_ID}
-            style={{ width: "100%", minHeight: 250 }}
+            className="w-full min-h-[250px] rounded-md overflow-hidden bg-black"
           />
           {native && !error && !candidates && (
             <ScanZoneOverlay
@@ -451,46 +437,35 @@ export default function CameraScanner({ onResult, onClose }: Props) {
         </div>
 
         {status && !error && (
-          <p style={{ fontSize: 12, color: "#666", margin: "8px 0 0" }}>
-            {status}
-          </p>
+          <p className="text-muted text-xs">{status}</p>
         )}
         {!status && !error && (
-          <p
-            style={{
-              fontSize: 13,
-              color: tipColor,
-              margin: "8px 0 0",
-              fontWeight: 500,
-              minHeight: 18,
-            }}
-          >
-            {tip}
-          </p>
+          <p className={`text-sm font-medium min-h-[18px] ${tipToneClass}`}>{tip}</p>
         )}
-        <p style={{ fontSize: 11, color: "#888", margin: "4px 0 0" }}>
+        <p className="text-muted text-xs">
           Drag corners to resize the scan box. Pinch zooms with the OS camera if
           supported.
         </p>
-        {error && (
-          <p style={{ fontSize: 12, color: "crimson", margin: "8px 0 0" }}>
-            {error}
-          </p>
-        )}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            marginTop: 8,
-            gap: 8,
-          }}
-        >
+        {error && <div className="alert alert-error">{error}</div>}
+        <div className="modal-actions">
           {candidates ? (
-            <button onClick={handleResume}>Resume scanning</button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleResume}
+            >
+              Resume scanning
+            </button>
           ) : (
             <span />
           )}
-          <button onClick={() => onCloseRef.current()}>Close</button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => onCloseRef.current()}
+          >
+            Close
+          </button>
         </div>
       </div>
     </div>

@@ -7,8 +7,11 @@ import type {
   AssetStatus,
   AssetStatusChangePayload,
   AssetStatusCreatePayload,
+  DashboardStats,
+  IntuneSyncResponse,
   Location,
   LocationCreatePayload,
+  LookupResult,
 } from "../types/inventory";
 
 // statuses
@@ -48,10 +51,31 @@ export interface AssetsQuery {
   status_code?: string;
   location_id?: number;
   assigned_upn?: string;
+  model?: string;
+  manufacturer?: string;
   include_archived?: boolean;
+  available_only?: boolean;
   limit?: number;
   offset?: number;
 }
+
+export interface AssetFacetRow {
+  asset_type: string;
+  manufacturer: string | null;
+  model: string | null;
+  series: string | null;
+  generation: string | null;
+  count: number;
+}
+
+export interface AssetFacets {
+  models: AssetFacetRow[];
+}
+
+export const getAssetFacets = (availableOnly = false) =>
+  apiGet<AssetFacets>(
+    `/assets/facets${availableOnly ? "?available_only=true" : ""}`,
+  );
 
 function toQuery(q: AssetsQuery): string {
   const params = new URLSearchParams();
@@ -72,6 +96,22 @@ export const lookupAssetBySerial = (serial: string) =>
 
 export const onboardAsset = (payload: AssetCreatePayload) =>
   apiPost<Asset>("/assets", payload);
+
+export interface BulkLocationResult {
+  updated: number;
+  unchanged: number;
+  skipped: number;
+  errors: { asset_id: number | null; error: string }[];
+}
+
+export const bulkSetLocation = (
+  asset_ids: number[],
+  location_id: number | null,
+) =>
+  apiPost<BulkLocationResult>("/assets/bulk-location", {
+    asset_ids,
+    location_id,
+  });
 
 export const updateAsset = (
   id: number,
@@ -94,3 +134,54 @@ export const archiveAsset = (id: number, notes?: string) =>
 
 export const getAssetHistory = (id: number) =>
   apiGet<AssetHistoryEntry[]>(`/assets/${id}/history`);
+
+// vendor lookup (Lenovo / Meraki / UPC / Intune merge) — best-effort
+export const lookupDevice = (code: string) =>
+  apiGet<LookupResult>(`/lookup?code=${encodeURIComponent(code)}`);
+
+// Intune — on-demand sync + portal deep link
+export const syncAssetFromIntune = (assetId: number) =>
+  apiPost<IntuneSyncResponse>(`/assets/${assetId}/intune/sync`);
+
+export const getIntunePortalUrl = (assetId: number) =>
+  apiGet<{ url: string }>(`/assets/${assetId}/intune/portal-url`);
+
+export interface IntuneBulkSyncResult {
+  total_devices: number;
+  created: number;
+  updated: number;
+  skipped_no_serial: number;
+  skipped_non_computer: number;
+  errors: { intune_id: string | null; serial: string | null; error: string }[];
+}
+
+export const bulkSyncFromIntune = () =>
+  apiPost<IntuneBulkSyncResult>(`/intune/bulk-sync`);
+
+export interface VendorRefreshResult {
+  checked: number;
+  updated: number;
+  no_match: number;
+  errors: { asset_id: number; serial: string; error: string }[];
+}
+
+export const refreshVendorModels = () =>
+  apiPost<VendorRefreshResult>(`/assets/vendor-refresh`);
+
+export interface LocationSyncResult {
+  fetched: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  deactivated: number;
+  errors: { location_id: string | null; error: string }[];
+  dry_run: boolean;
+}
+
+export const syncLocationsFromSnowflake = (dryRun = false) =>
+  apiPost<LocationSyncResult>(
+    `/locations/sync${dryRun ? "?dry_run=true" : ""}`,
+  );
+
+// dashboard
+export const getDashboardStats = () => apiGet<DashboardStats>(`/stats`);

@@ -1,14 +1,20 @@
 import { useEffect, useState } from "react";
 
+import Select from "../components/Select";
 import {
   createLocation,
   deleteLocation,
   listLocations,
+  syncLocationsFromSnowflake,
   updateLocation,
+  type LocationSyncResult,
 } from "../services/inventory";
 import type { Location, LocationType } from "../types/inventory";
+import { useAlert, useConfirm } from "../components/ConfirmProvider";
 
 export default function Locations() {
+  const confirm = useConfirm();
+  const alertModal = useAlert();
   const [locations, setLocations] = useState<Location[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -16,6 +22,31 @@ export default function Locations() {
   const [name, setName] = useState("");
   const [type, setType] = useState<LocationType>("warehouse");
   const [address, setAddress] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<LocationSyncResult | null>(null);
+
+  const doSync = async () => {
+    const ok = await confirm({
+      title: "Sync locations from Snowflake?",
+      message:
+        "Pulls open corporate locations from CORPORATE.LOCATIONS_ALL_V and upserts into the local table. Locations missing from Snowflake are deactivated, not deleted.",
+      tone: "info",
+      confirmLabel: "Run",
+    });
+    if (!ok) return;
+    setSyncing(true);
+    setSyncResult(null);
+    setError(null);
+    try {
+      const r = await syncLocationsFromSnowflake();
+      setSyncResult(r);
+      void reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const reload = () =>
     listLocations(true)
@@ -45,17 +76,43 @@ export default function Locations() {
   };
 
   return (
-    <div>
-      <h2>Locations</h2>
-      {error && <p style={{ color: "crimson" }}>{error}</p>}
+    <div className="stack-lg">
+      <div className="cluster" style={{ justifyContent: "space-between" }}>
+        <h2 className="heading-2">Locations</h2>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => void doSync()}
+          disabled={syncing}
+          title="Pull corporate locations from Snowflake"
+        >
+          {syncing ? "Syncing…" : "Sync from Snowflake"}
+        </button>
+      </div>
+      {error && <div className="alert alert-error">{error}</div>}
+      {syncResult && (
+        <div className="alert alert-info">
+          Snowflake sync: <strong>{syncResult.created}</strong> created,{" "}
+          <strong>{syncResult.updated}</strong> updated,{" "}
+          {syncResult.unchanged} unchanged, {syncResult.deactivated}{" "}
+          deactivated, {syncResult.errors.length} errors. Fetched{" "}
+          {syncResult.fetched} rows.
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
         <input placeholder="code" value={code} onChange={(e) => setCode(e.target.value)} />
         <input placeholder="name" value={name} onChange={(e) => setName(e.target.value)} />
-        <select value={type} onChange={(e) => setType(e.target.value as LocationType)}>
-          <option value="warehouse">warehouse</option>
-          <option value="site">site</option>
-        </select>
+        <div style={{ minWidth: "10rem" }}>
+          <Select
+            value={type}
+            onChange={(v) => setType(v as LocationType)}
+            options={[
+              { value: "warehouse", label: "warehouse" },
+              { value: "site", label: "site" },
+            ]}
+          />
+        </div>
         <input
           placeholder="address"
           value={address}
@@ -97,12 +154,22 @@ export default function Locations() {
               <td>
                 <button
                   onClick={async () => {
-                    if (!confirm(`Delete ${l.name}?`)) return;
+                    const ok = await confirm({
+                      title: "Delete location?",
+                      message: `Delete "${l.name}"? This cannot be undone.`,
+                      tone: "danger",
+                      confirmLabel: "Delete",
+                    });
+                    if (!ok) return;
                     try {
                       await deleteLocation(l.id);
                       void reload();
                     } catch (err) {
-                      alert(err instanceof Error ? err.message : String(err));
+                      await alertModal({
+                        title: "Delete failed",
+                        message: err instanceof Error ? err.message : String(err),
+                        tone: "danger",
+                      });
                     }
                   }}
                 >

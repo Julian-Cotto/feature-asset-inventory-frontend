@@ -5,7 +5,14 @@ export default defineConfig(({ mode }) => {
   const isMicrofrontendBuild = mode === "mf";
   const localPort = 3200;
 
+  // In local dev the shell proxies /_mfe/asset-inventory/* → :3200 so the MFE
+  // is served same-origin (one ngrok tunnel covers everything). Setting base
+  // makes Vite emit all import URLs with that prefix, so child imports also
+  // route through the proxy. The lib build (mode === "mf") keeps default base.
+  const sharedBase = isMicrofrontendBuild ? "/" : "/_mfe/asset-inventory/";
+
   const sharedConfig = {
+    base: sharedBase,
     plugins: [react()],
     server: {
       host: "0.0.0.0",

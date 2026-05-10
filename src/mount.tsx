@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import App from "./App";
+import { ConfirmProvider } from "./components/ConfirmProvider";
 import { FeatureAuthProvider } from "./platform/authProvider";
 import {
   setFeatureMountContext,
@@ -21,7 +22,9 @@ export function mountFeature(
   root.render(
     <React.StrictMode>
       <FeatureAuthProvider>
-        <App />
+        <ConfirmProvider>
+          <App />
+        </ConfirmProvider>
       </FeatureAuthProvider>
     </React.StrictMode>,
   );

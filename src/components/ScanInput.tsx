@@ -1,8 +1,27 @@
-import { Html5Qrcode } from "html5-qrcode";
 import { useEffect, useRef, useState } from "react";
 
 import CameraScanner from "./CameraScanner";
-import { SCANNER_CONFIG } from "./scanFormats";
+
+const UPLOAD_FORMATS = [
+  "qr_code",
+  "code_128",
+  "code_39",
+  "code_93",
+  "codabar",
+  "ean_13",
+  "ean_8",
+  "upc_a",
+  "upc_e",
+  "itf",
+  "data_matrix",
+  "aztec",
+  "pdf417",
+];
+
+async function ensureBarcodeDetector(): Promise<void> {
+  if (typeof window.BarcodeDetector === "function") return;
+  await import("barcode-detector/polyfill");
+}
 
 interface Props {
   value: string;
@@ -27,7 +46,15 @@ export default function ScanInput({
   const [fileError, setFileError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (autoFocus) inputRef.current?.focus();
+    if (!autoFocus) return;
+    // Skip auto-focus on touch / narrow viewports — pops the soft keyboard
+    // before the user has a chance to pick Camera or Upload image.
+    if (typeof window !== "undefined") {
+      const isTouch = window.matchMedia("(pointer: coarse)").matches;
+      const isNarrow = window.matchMedia("(max-width: 639px)").matches;
+      if (isTouch || isNarrow) return;
+    }
+    inputRef.current?.focus();
   }, [autoFocus]);
 
   const accept = (text: string) => {
@@ -38,12 +65,18 @@ export default function ScanInput({
   const handleUpload = async (file: File) => {
     setFileError(null);
     try {
-      const inst = new Html5Qrcode(
-        "__hidden_scan_target__",
-        SCANNER_CONFIG as never,
-      );
-      const decoded = await inst.scanFile(file, false);
-      accept(decoded);
+      await ensureBarcodeDetector();
+      const bitmap = await createImageBitmap(file);
+      try {
+        const detector = new window.BarcodeDetector!({ formats: UPLOAD_FORMATS });
+        const codes = await detector.detect(bitmap);
+        if (codes.length === 0) {
+          throw new Error("No barcode or QR code found in image.");
+        }
+        accept(codes[0].rawValue);
+      } finally {
+        bitmap.close?.();
+      }
     } catch (err) {
       setFileError(
         err instanceof Error
@@ -56,13 +89,12 @@ export default function ScanInput({
   };
 
   return (
-    <div>
-      <label style={{ display: "block", fontSize: 12, marginBottom: 4 }}>
-        {label}
-      </label>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+    <div className="field">
+      <label className="label">{label}</label>
+      <div className="cluster">
         <input
           ref={inputRef}
+          className="input input-mono flex-1"
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
@@ -74,19 +106,25 @@ export default function ScanInput({
           placeholder={placeholder}
           autoComplete="off"
           spellCheck={false}
-          style={{ flex: "1 1 220px", padding: "6px 8px", fontFamily: "monospace" }}
         />
-        <button type="button" onClick={() => setShowCamera(true)}>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => setShowCamera(true)}
+        >
           Camera
         </button>
-        <button type="button" onClick={() => fileRef.current?.click()}>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => fileRef.current?.click()}
+        >
           Upload image
         </button>
         <input
           ref={fileRef}
           type="file"
           accept="image/*"
-          capture="environment"
           style={{ display: "none" }}
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -94,13 +132,7 @@ export default function ScanInput({
           }}
         />
       </div>
-      {fileError && (
-        <div style={{ fontSize: 12, color: "crimson", marginTop: 4 }}>
-          {fileError}
-        </div>
-      )}
-      {/* hidden mount target for Html5Qrcode.scanFile */}
-      <div id="__hidden_scan_target__" style={{ display: "none" }} />
+      {fileError && <div className="alert alert-error">{fileError}</div>}
       {showCamera && (
         <CameraScanner
           onResult={(text) => {
