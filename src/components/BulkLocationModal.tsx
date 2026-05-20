@@ -8,6 +8,7 @@ import {
   type BulkLocationResult,
 } from "../services/inventory";
 import type { Location } from "../types/inventory";
+import { locationLabel } from "../utils/locationLabel";
 
 interface Props {
   assetIds: number[];
@@ -89,12 +90,14 @@ export default function BulkLocationModal({
             value={locationId}
             onChange={setLocationId}
             placeholder="— clear location —"
+            searchable
+            searchPlaceholder="Filter by name / address / city"
             disabled={submitting}
             options={[
               { value: "", label: "— clear location —" },
               ...locations.map((l) => ({
                 value: String(l.id),
-                label: `${l.name} (${l.type})`,
+                label: locationLabel(l),
               })),
             ]}
           />

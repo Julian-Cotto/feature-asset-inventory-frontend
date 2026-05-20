@@ -12,6 +12,7 @@ export interface ShipmentsQuery {
   resolution?: string;
   carrier_status?: string;
   q?: string;
+  archived?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -50,6 +51,15 @@ export const resolveShipment = (id: number) =>
 
 export const cancelShipment = (id: number) =>
   apiPost<Shipment>(`/shipments/${id}/cancel`);
+
+export const archiveShipment = (id: number) =>
+  apiPost<Shipment>(`/shipments/${id}/archive`);
+
+export const unarchiveShipment = (id: number) =>
+  apiPost<Shipment>(`/shipments/${id}/unarchive`);
+
+export const deleteShipment = (id: number) =>
+  apiDelete<void>(`/shipments/${id}`);
 
 export const addShipmentItem = (id: number, assetId: number) =>
   apiPost<ShipmentItem>(`/shipments/${id}/items`, { asset_id: assetId });

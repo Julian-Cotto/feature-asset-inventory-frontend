@@ -98,8 +98,6 @@ export default function Dashboard({ onStatusClick, onAssetClick }: Props) {
 
   return (
     <div className="stack-lg">
-      <h2 className="heading-2">Dashboard</h2>
-
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="stat-card">

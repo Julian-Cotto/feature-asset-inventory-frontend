@@ -98,6 +98,31 @@ export async function apiFetch<T>(
   return parseResponse<T>(response);
 }
 
+/** Fetch with auth header but expect a binary body. Returns the raw Blob
+ *  plus the filename hinted at via Content-Disposition (when present).
+ *  Used for CSV / XLSX export endpoints. */
+export async function apiFetchBlob(
+  path: string,
+  init?: RequestInit,
+): Promise<{ blob: Blob; filename: string | null }> {
+  const response = await fetch(buildUrl(path), {
+    ...init,
+    headers: buildHeaders(init?.headers),
+  });
+
+  if (!response.ok) {
+    const bodyText = await response.text();
+    throw new Error(
+      `API request failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ""}`,
+    );
+  }
+
+  const blob = await response.blob();
+  const disp = response.headers.get("Content-Disposition") ?? "";
+  const m = /filename\s*=\s*"?([^";]+)"?/i.exec(disp);
+  return { blob, filename: m ? m[1] : null };
+}
+
 export async function apiGet<T>(
   path: string,
   init?: RequestInit,

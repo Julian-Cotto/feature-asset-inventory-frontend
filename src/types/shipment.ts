@@ -78,6 +78,8 @@ export interface Shipment {
   resolved_by_upn: string | null;
   cancelled_at: string | null;
   cancelled_by_upn: string | null;
+  archived_at: string | null;
+  archived_by_upn: string | null;
 
   created_at: string;
   updated_at: string;

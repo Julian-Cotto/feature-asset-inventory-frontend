@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import DatePicker from "../components/DatePicker";
 import Select from "../components/Select";
+import { locationLabel } from "../utils/locationLabel";
 import {
   getAssetFacets,
   listAssets,
@@ -207,12 +208,9 @@ export default function DeploymentCreate({ onCreated, onCancel }: Props) {
       {error && <div className="alert alert-error">{error}</div>}
 
       <div className="stack-lg max-w-xl">
-        <section className="card">
-          <div className="card-header">
-            <span className="eyebrow">Identify</span>
-          </div>
-          <div className="card-body stack">
-            <Field label="Name">
+        <section className="section-block">
+          <span className="eyebrow">Identify</span>
+          <Field label="Name">
               <input
                 className="input"
                 value={name}
@@ -241,15 +239,11 @@ export default function DeploymentCreate({ onCreated, onCancel }: Props) {
                 onChange={(e) => setDescription(e.target.value)}
               />
             </Field>
-          </div>
         </section>
 
-        <section className="card">
-          <div className="card-header">
-            <span className="eyebrow">Target location</span>
-          </div>
-          <div className="card-body stack">
-            <Field label="Saved location (optional)">
+        <section className="section-block">
+          <span className="eyebrow">Target location</span>
+          <Field label="Saved location (optional)">
               <Select
                 value={targetLocationId === "" ? "" : String(targetLocationId)}
                 onChange={(v) => {
@@ -270,11 +264,13 @@ export default function DeploymentCreate({ onCreated, onCancel }: Props) {
                   }
                 }}
                 placeholder="— pick one or fill in below —"
+                searchable
+                searchPlaceholder="Filter by name / address / city"
                 options={[
                   { value: "", label: "— pick one or fill in below —" },
                   ...locations.map((l) => ({
                     value: String(l.id),
-                    label: `${l.name} (${l.type})`,
+                    label: locationLabel(l),
                   })),
                 ]}
               />
@@ -349,15 +345,11 @@ export default function DeploymentCreate({ onCreated, onCancel }: Props) {
                 />
               </Field>
             </div>
-          </div>
         </section>
 
-        <section className="card">
-          <div className="card-header">
-            <span className="eyebrow">Assets (optional)</span>
-          </div>
-          <div className="card-body stack">
-            <div className="cluster">
+        <section className="section-block">
+          <span className="eyebrow">Assets (optional)</span>
+          <div className="cluster">
               <button
                 type="button"
                 className={pickMode === "manual" ? "tab tab-active" : "tab"}
@@ -591,21 +583,16 @@ export default function DeploymentCreate({ onCreated, onCancel }: Props) {
                 </p>
               </div>
             )}
-          </div>
         </section>
 
-        <section className="card">
-          <div className="card-header">
-            <span className="eyebrow">Notes</span>
-          </div>
-          <div className="card-body">
-            <textarea
-              className="textarea"
-              rows={3}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
-          </div>
+        <section className="section-block">
+          <span className="eyebrow">Notes</span>
+          <textarea
+            className="textarea"
+            rows={3}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
         </section>
       </div>
 

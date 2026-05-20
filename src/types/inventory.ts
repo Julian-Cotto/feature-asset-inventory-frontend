@@ -85,9 +85,43 @@ export interface Asset {
   intune_ownership: string | null;
   intune_compliance: string | null;
   intune_last_check_in: string | null;
+  aad_device_id: string | null;
+  defender_id: string | null;
+  defender_synced_at: string | null;
+  defender_health_status: string | null;
+  defender_risk_score: string | null;
+  defender_exposure_level: string | null;
+  defender_last_seen_at: string | null;
+  defender_onboarding_status: string | null;
+  defender_av_status: string | null;
+  defender_os_build: string | null;
+  defender_last_ip: string | null;
+  defender_tags: string | null;
   warranty_active: boolean | null;
   warranty_end_date: string | null;
   warranty_synced_at: string | null;
+  mac_address: string | null;
+  network_id: number | null;
+  network_name: string | null;
+  reserved_by_kind: "deployment" | "shipment" | null;
+  reserved_by_id: number | null;
+  reserved_by_label: string | null;
+}
+
+export interface ReservationRow {
+  asset_id: number;
+  asset_tag: string | null;
+  serial_number: string;
+  asset_type: string;
+  manufacturer: string | null;
+  model: string | null;
+  intune_device_name: string | null;
+  assigned_upn: string | null;
+  kind: "deployment" | "shipment";
+  source_id: number;
+  source_label: string;
+  source_status: string;
+  destination: string | null;
 }
 
 export interface SeriesPoint {

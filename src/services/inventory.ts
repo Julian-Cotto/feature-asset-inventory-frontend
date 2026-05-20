@@ -12,6 +12,7 @@ import type {
   Location,
   LocationCreatePayload,
   LookupResult,
+  ReservationRow,
 } from "../types/inventory";
 
 // statuses
@@ -53,11 +54,24 @@ export interface AssetsQuery {
   assigned_upn?: string;
   model?: string;
   manufacturer?: string;
+  os?: string;
+  assignment_state?: "assigned" | "unassigned";
+  warranty_state?: "on" | "off" | "unknown";
+  defender_health?: string;
   include_archived?: boolean;
   available_only?: boolean;
   limit?: number;
   offset?: number;
 }
+
+export interface AssetFilterOptions {
+  manufacturers: string[];
+  os: string[];
+  defender_health: string[];
+}
+
+export const getAssetFilterOptions = () =>
+  apiGet<AssetFilterOptions>("/assets/filter-options");
 
 export interface AssetFacetRow {
   asset_type: string;
@@ -88,6 +102,13 @@ function toQuery(q: AssetsQuery): string {
 
 export const listAssets = (q: AssetsQuery = {}) =>
   apiGet<Asset[]>(`/assets${toQuery(q)}`);
+
+export const countAssets = (q: AssetsQuery = {}) => {
+  const { limit, offset, ...rest } = q;
+  void limit;
+  void offset;
+  return apiGet<{ total: number }>(`/assets/count${toQuery(rest)}`);
+};
 
 export const getAsset = (id: number) => apiGet<Asset>(`/assets/${id}`);
 
@@ -146,6 +167,19 @@ export const syncAssetFromIntune = (assetId: number) =>
 export const getIntunePortalUrl = (assetId: number) =>
   apiGet<{ url: string }>(`/assets/${assetId}/intune/portal-url`);
 
+// Microsoft Defender for Endpoint — forensic package collection
+export interface DefenderForensicsResponse {
+  asset_id: number;
+  machine_id: string;
+  action_id: string | null;
+  status: string | null;
+  requestor: string | null;
+  request_source: string | null;
+}
+
+export const collectDefenderForensics = (assetId: number) =>
+  apiPost<DefenderForensicsResponse>(`/assets/${assetId}/defender/collect-forensics`);
+
 export interface IntuneBulkSyncResult {
   total_devices: number;
   created: number;
@@ -157,6 +191,19 @@ export interface IntuneBulkSyncResult {
 
 export const bulkSyncFromIntune = () =>
   apiPost<IntuneBulkSyncResult>(`/intune/bulk-sync`);
+
+export interface MerakiBulkSyncResult {
+  total_devices: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  skipped_no_serial: number;
+  skipped_non_network: number;
+  errors: { serial: string | null; error: string }[];
+}
+
+export const bulkSyncFromMeraki = () =>
+  apiPost<MerakiBulkSyncResult>(`/meraki/bulk-sync`);
 
 export interface VendorRefreshResult {
   checked: number;
@@ -185,3 +232,36 @@ export const syncLocationsFromSnowflake = (dryRun = false) =>
 
 // dashboard
 export const getDashboardStats = () => apiGet<DashboardStats>(`/stats`);
+
+// reservations
+export const listReservations = () =>
+  apiGet<ReservationRow[]>(`/reservations`);
+
+// reports
+import type {
+  ActivityReport,
+  FleetReport,
+  IntuneReport,
+  PeopleReport,
+  SecurityReport,
+  ShipmentsReport,
+  SoftwareReport,
+  StockReport,
+  WarrantyReport,
+} from "../types/reports";
+
+export const getFleetReport = () => apiGet<FleetReport>(`/reports/fleet`);
+export const getWarrantyReport = () =>
+  apiGet<WarrantyReport>(`/reports/warranty`);
+export const getStockReport = () => apiGet<StockReport>(`/reports/stock`);
+export const getShipmentsReport = () =>
+  apiGet<ShipmentsReport>(`/reports/shipments`);
+export const getIntuneReport = () => apiGet<IntuneReport>(`/reports/intune`);
+export const getActivityReport = () =>
+  apiGet<ActivityReport>(`/reports/activity`);
+export const getSecurityReport = () =>
+  apiGet<SecurityReport>(`/reports/security`);
+export const getSoftwareReport = () =>
+  apiGet<SoftwareReport>(`/reports/software`);
+export const getPeopleReport = () =>
+  apiGet<PeopleReport>(`/reports/people`);

@@ -9,6 +9,7 @@ import type { Asset, AssetType, Location } from "../types/inventory";
 import ScanInput from "../components/ScanInput";
 import Select from "../components/Select";
 import { friendlyModel } from "../utils/friendlyModel";
+import { locationLabel } from "../utils/locationLabel";
 import type {
   AddressInput,
   AutoAssignRequest,
@@ -70,6 +71,8 @@ export default function ShipmentCreate({ onCreated, onCancel }: Props) {
 
   const [assetSearch, setAssetSearch] = useState("");
   const [searchResults, setSearchResults] = useState<Asset[]>([]);
+  const [searchTypeFilter, setSearchTypeFilter] = useState("");
+  const [showAllAssets, setShowAllAssets] = useState(false);
   const [pickedAssets, setPickedAssets] = useState<Asset[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
 
@@ -98,13 +101,18 @@ export default function ShipmentCreate({ onCreated, onCancel }: Props) {
 
   const runSearch = useMemo(
     () =>
-      async (term: string) => {
-        if (!term.trim()) {
+      async (term: string, typeFilter: string, showAll: boolean) => {
+        if (!term.trim() && !typeFilter) {
           setSearchResults([]);
           return;
         }
         try {
-          const results = await listAssets({ q: term, limit: 20 });
+          const results = await listAssets({
+            q: term || undefined,
+            asset_type: typeFilter || undefined,
+            available_only: !showAll,
+            limit: 30,
+          });
           setSearchResults(results);
         } catch {
           /* ignore */
@@ -114,9 +122,12 @@ export default function ShipmentCreate({ onCreated, onCancel }: Props) {
   );
 
   useEffect(() => {
-    const t = window.setTimeout(() => void runSearch(assetSearch), 250);
+    const t = window.setTimeout(
+      () => void runSearch(assetSearch, searchTypeFilter, showAllAssets),
+      250,
+    );
     return () => window.clearTimeout(t);
-  }, [assetSearch, runSearch]);
+  }, [assetSearch, searchTypeFilter, showAllAssets, runSearch]);
 
   function pickAsset(a: Asset) {
     if (pickedAssetIds.includes(a.id)) return;
@@ -278,13 +289,39 @@ export default function ShipmentCreate({ onCreated, onCancel }: Props) {
 
         {pickMode === "manual" ? (
           <>
+            <Field label="Type filter">
+              <Select
+                value={searchTypeFilter}
+                onChange={setSearchTypeFilter}
+                placeholder="— any type —"
+                options={[
+                  { value: "", label: "— any type —" },
+                  ...ASSET_TYPE_OPTIONS.map((o) => ({
+                    value: o.value,
+                    label: o.label,
+                  })),
+                ]}
+              />
+            </Field>
             <Field label="Search by tag / serial / model">
               <input
                 className="input"
                 value={assetSearch}
                 onChange={(e) => setAssetSearch(e.target.value)}
-                placeholder="Type to search…"
+                placeholder="Type to search… (or just use type filter above)"
               />
+              <label
+                className="cluster mt-1 text-xs text-text-muted cursor-pointer"
+                style={{ gap: "0.4rem" }}
+              >
+                <input
+                  type="checkbox"
+                  className="checkbox"
+                  checked={showAllAssets}
+                  onChange={(e) => setShowAllAssets(e.target.checked)}
+                />
+                Show assigned / reserved assets too
+              </label>
               {searchResults.length > 0 && (
                 <div className="card mt-1">
                   <ul className="list-clean">
@@ -477,11 +514,13 @@ function AddressBlock({
             }
           }}
           placeholder="— pick one or fill in below —"
+          searchable
+          searchPlaceholder="Filter by name / address / city"
           options={[
             { value: "", label: "— pick one or fill in below —" },
             ...locations.map((l) => ({
               value: String(l.id),
-              label: `${l.name} (${l.type})`,
+              label: locationLabel(l),
             })),
           ]}
         />

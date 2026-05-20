@@ -6,6 +6,12 @@ export interface ShellFeatureRuntimeBackendContractV1 {
   healthEndpoint?: string;
 }
 
+export interface ShellNavigateOptions {
+  replace?: boolean;
+}
+
+export type ShellSubPathHandler = (subPath: string) => void;
+
 export interface ShellFeatureRuntimeContractV1 {
   version: "v1";
   environment?: string;
@@ -15,6 +21,14 @@ export interface ShellFeatureRuntimeContractV1 {
   backend?: ShellFeatureRuntimeBackendContractV1;
   flags?: Record<string, boolean>;
   permissions?: string[];
+  /** Path under the feature's basePath at mount time. Always starts with "/"
+   *  (or is "" when at the feature's root). */
+  subPath?: string;
+  /** Push a new subPath into the browser URL. */
+  navigate?: (subPath: string, options?: ShellNavigateOptions) => void;
+  /** Subscribe to subPath changes driven by the shell (back/forward,
+   *  external links). Returns an unsubscribe function. */
+  onSubPathChange?: (handler: ShellSubPathHandler) => () => void;
 }
 
 export interface ShellFeatureManifestContract {

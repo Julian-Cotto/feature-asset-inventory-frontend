@@ -1,9 +1,18 @@
 import { useEffect, useState } from "react";
-import { Cpu, Layers, MapPin, ScanBarcode, StickyNote } from "lucide-react";
+import {
+  CheckCircle2,
+  Cpu,
+  Layers,
+  MapPin,
+  ScanBarcode,
+  Search,
+  StickyNote,
+} from "lucide-react";
 
 import BulkOnboardModal from "../components/BulkOnboardModal";
 import ScanInput from "../components/ScanInput";
 import Select from "../components/Select";
+import { AccentPill, SectionHeader } from "../components/visual";
 import {
   listLocations,
   listStatuses,
@@ -17,6 +26,7 @@ import type {
   Location,
   LookupResult,
 } from "../types/inventory";
+import { locationLabel } from "../utils/locationLabel";
 import { normalizeOs } from "../utils/normalizeOs";
 
 interface Props {
@@ -170,218 +180,228 @@ export default function OnboardAsset({ onCreated }: Props) {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* ── Identify ─────────────────────────────────────────── */}
-        <section className="card lg:col-span-2">
-          <div className="card-header">
-            <span className="cluster" style={{ gap: "0.5rem" }}>
-              <ScanBarcode size={14} className="text-primary" />
-              <span className="eyebrow">Identify</span>
-            </span>
+      <div className="card card-body stack">
+        <SectionHeader
+          icon={<ScanBarcode size={16} />}
+          title="Identify"
+          tint="info"
+        />
+        <ScanInput
+          value={serial}
+          onChange={setSerial}
+          onScan={handleScan}
+          label="Serial number (scan or type)"
+        />
+        {duplicate !== null && (
+          <div className="alert alert-warning">
+            Serial already exists as asset #{duplicate}.
           </div>
-          <div className="card-body stack">
-            <ScanInput
-              value={serial}
-              onChange={setSerial}
-              onScan={handleScan}
-              label="Serial number (scan or type)"
+        )}
+        {lookingUp && (
+          <div
+            className="cluster text-info-soft-fg text-sm"
+            style={{ gap: "0.375rem" }}
+          >
+            <Search size={14} className="animate-spin" />
+            Identifying device…
+          </div>
+        )}
+        {lookup && lookup.manufacturer && (
+          <div
+            className="card card-body stack"
+            style={{
+              background: "rgb(var(--color-success) / 0.08)",
+              borderColor: "rgb(var(--color-success) / 0.35)",
+            }}
+          >
+            <div className="cluster" style={{ gap: "0.5rem" }}>
+              <CheckCircle2
+                size={16}
+                className="text-success-soft-fg shrink-0"
+              />
+              <span className="font-medium">Device identified</span>
+              {lookup.cached && (
+                <span className="badge text-xs">cached</span>
+              )}
+              {lookup.intuneId && (
+                <span className="badge badge-info text-xs">Intune</span>
+              )}
+            </div>
+            <div className="cluster" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
+              <AccentPill value={lookup.manufacturer} />
+              {lookup.model && <AccentPill value={lookup.model} />}
+            </div>
+            {lookup.intuneId && lookup.assignedUpn && (
+              <span className="text-xs text-muted">
+                Currently assigned to{" "}
+                <code className="font-mono">{lookup.assignedUpn}</code>
+              </span>
+            )}
+          </div>
+        )}
+        {lookup && !lookup.manufacturer && lookup.error && (
+          <div className="text-muted text-xs">
+            Lookup: {lookup.source} — {lookup.error}
+          </div>
+        )}
+        <div className="form-row">
+          <Field label="Asset tag (optional)">
+            <input
+              className="input"
+              value={assetTag}
+              onChange={(e) => setAssetTag(e.target.value)}
+              placeholder="leave blank if none"
             />
-            {duplicate !== null && (
-              <div className="alert alert-warning">
-                Serial already exists as asset #{duplicate}.
-              </div>
-            )}
-            {lookingUp && (
-              <div className="text-muted text-sm">Identifying device…</div>
-            )}
-            {lookup && lookup.manufacturer && (
-              <div className="alert alert-info">
-                Identified: <strong>{lookup.manufacturer}</strong>
-                {lookup.model ? ` · ${lookup.model}` : ""}
-                {lookup.cached ? " (cached)" : ""}
-                {lookup.intuneId && (
-                  <>
-                    <br />
-                    <span className="text-xs">
-                      Found in Intune
-                      {lookup.assignedUpn
-                        ? ` · assigned to ${lookup.assignedUpn}`
-                        : ""}
-                    </span>
-                  </>
-                )}
-              </div>
-            )}
-            {lookup && !lookup.manufacturer && lookup.error && (
-              <div className="text-muted text-xs">
-                Lookup: {lookup.source} — {lookup.error}
-              </div>
-            )}
-            <Field label="Asset tag (optional)">
+          </Field>
+          <Field label="Type">
+            <Select
+              value={assetType}
+              onChange={(v) => {
+                const next = v as AssetType;
+                setAssetType(next);
+                if (isNetworkType(next)) {
+                  setOs("");
+                  setOsVersion("");
+                  setSeries("");
+                  setGeneration("");
+                  setCpu("");
+                }
+              }}
+              options={TYPE_OPTIONS.map((o) => ({
+                value: o.value,
+                label: o.label,
+              }))}
+            />
+          </Field>
+        </div>
+      </div>
+
+      {isComputer && (
+        <div className="card card-body stack">
+          <SectionHeader
+            icon={<Cpu size={16} />}
+            title="Hardware"
+            tint="purple"
+          />
+          <div className="form-row">
+            <Field label="Manufacturer">
               <input
                 className="input"
-                value={assetTag}
-                onChange={(e) => setAssetTag(e.target.value)}
-                placeholder="leave blank if none"
+                value={manufacturer}
+                onChange={(e) => setManufacturer(e.target.value)}
               />
             </Field>
-            <Field label="Type">
-              <Select
-                value={assetType}
-                onChange={(v) => {
-                  const next = v as AssetType;
-                  setAssetType(next);
-                  if (isNetworkType(next)) {
-                    setOs("");
-                    setOsVersion("");
-                    setSeries("");
-                    setGeneration("");
-                    setCpu("");
-                  }
-                }}
-                options={TYPE_OPTIONS.map((o) => ({
-                  value: o.value,
-                  label: o.label,
-                }))}
+            <Field label="Model">
+              <input
+                className="input"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
               />
             </Field>
           </div>
-        </section>
-
-        {/* ── Hardware (computer types only) ──────────────────── */}
-        {isComputer && (
-          <section className="card lg:col-span-2">
-            <div className="card-header">
-              <span className="cluster" style={{ gap: "0.5rem" }}>
-                <Cpu size={14} className="text-primary" />
-                <span className="eyebrow">Hardware</span>
-              </span>
-            </div>
-            <div className="card-body stack">
-              <Field label="Manufacturer">
-                <input
-                  className="input"
-                  value={manufacturer}
-                  onChange={(e) => setManufacturer(e.target.value)}
-                />
-              </Field>
-              <Field label="Model">
-                <input
-                  className="input"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                />
-              </Field>
-              <div className="form-row">
-                <Field label="Series (optional)">
-                  <input
-                    className="input"
-                    value={series}
-                    onChange={(e) => setSeries(e.target.value)}
-                    placeholder="e.g. ThinkPad E16"
-                  />
-                </Field>
-                <Field label="Generation (optional)">
-                  <input
-                    className="input"
-                    value={generation}
-                    onChange={(e) => setGeneration(e.target.value)}
-                    placeholder="e.g. Gen 1"
-                  />
-                </Field>
-              </div>
-              <Field label="CPU (optional)">
-                <input
-                  className="input"
-                  value={cpu}
-                  onChange={(e) => setCpu(e.target.value)}
-                  placeholder="e.g. i7-1355U"
-                />
-              </Field>
-              <div className="form-row">
-                <Field label="OS">
-                  <Select
-                    value={os}
-                    onChange={setOs}
-                    placeholder="— select —"
-                    options={[
-                      { value: "", label: "— select —" },
-                      ...OS_OPTIONS.map((o) => ({ value: o, label: o })),
-                    ]}
-                  />
-                </Field>
-                <Field label="OS version (optional)">
-                  <input
-                    className="input"
-                    value={osVersion}
-                    onChange={(e) => setOsVersion(e.target.value)}
-                    placeholder="e.g. 23H2, 14.4, Ubuntu 22.04"
-                  />
-                </Field>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* ── Placement ───────────────────────────────────────── */}
-        <section className="card lg:col-span-2">
-          <div className="card-header">
-            <span className="cluster" style={{ gap: "0.5rem" }}>
-              <MapPin size={14} className="text-primary" />
-              <span className="eyebrow">Placement</span>
-            </span>
-          </div>
-          <div className="card-body stack">
-            <Field label="Status">
-              <Select
-                value={statusCode}
-                onChange={setStatusCode}
-                options={statuses.map((s) => ({
-                  value: s.code,
-                  label: s.label,
-                }))}
+          <div className="form-row">
+            <Field label="Series (optional)">
+              <input
+                className="input"
+                value={series}
+                onChange={(e) => setSeries(e.target.value)}
+                placeholder="e.g. ThinkPad E16"
               />
             </Field>
-            <Field label="Location (optional)">
+            <Field label="Generation (optional)">
+              <input
+                className="input"
+                value={generation}
+                onChange={(e) => setGeneration(e.target.value)}
+                placeholder="e.g. Gen 1"
+              />
+            </Field>
+          </div>
+          <Field label="CPU (optional)">
+            <input
+              className="input"
+              value={cpu}
+              onChange={(e) => setCpu(e.target.value)}
+              placeholder="e.g. i7-1355U"
+            />
+          </Field>
+          <div className="form-row">
+            <Field label="OS">
               <Select
-                value={locationId === "" ? "" : String(locationId)}
-                onChange={(v) => setLocationId(v === "" ? "" : Number(v))}
-                placeholder="— none —"
+                value={os}
+                onChange={setOs}
+                placeholder="— select —"
                 options={[
-                  { value: "", label: "— none —" },
-                  ...locations.map((l) => ({
-                    value: String(l.id),
-                    label: `${l.name} (${l.type})`,
-                  })),
+                  { value: "", label: "— select —" },
+                  ...OS_OPTIONS.map((o) => ({ value: o, label: o })),
                 ]}
               />
             </Field>
+            <Field label="OS version (optional)">
+              <input
+                className="input"
+                value={osVersion}
+                onChange={(e) => setOsVersion(e.target.value)}
+                placeholder="e.g. 23H2, 14.4, Ubuntu 22.04"
+              />
+            </Field>
           </div>
-        </section>
+        </div>
+      )}
 
-        {/* ── Notes ───────────────────────────────────────────── */}
-        <section className="card lg:col-span-2">
-          <div className="card-header">
-            <span className="cluster" style={{ gap: "0.5rem" }}>
-              <StickyNote size={14} className="text-primary" />
-              <span className="eyebrow">Notes</span>
-            </span>
-          </div>
-          <div className="card-body">
-            <textarea
-              className="textarea"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={3}
-              placeholder="Any extra context (optional)"
+      <div className="card card-body stack">
+        <SectionHeader
+          icon={<MapPin size={16} />}
+          title="Placement"
+          tint="green"
+        />
+        <div className="form-row">
+          <Field label="Status">
+            <Select
+              value={statusCode}
+              onChange={setStatusCode}
+              options={statuses.map((s) => ({
+                value: s.code,
+                label: s.label,
+              }))}
             />
-          </div>
-        </section>
-
-        {error && (
-          <div className="alert alert-error lg:col-span-2">{error}</div>
-        )}
+          </Field>
+          <Field label="Location (optional)">
+            <Select
+              value={locationId === "" ? "" : String(locationId)}
+              onChange={(v) => setLocationId(v === "" ? "" : Number(v))}
+              placeholder="— none —"
+              searchable
+              searchPlaceholder="Filter by name / address / city"
+              options={[
+                { value: "", label: "— none —" },
+                ...locations.map((l) => ({
+                  value: String(l.id),
+                  label: locationLabel(l),
+                })),
+              ]}
+            />
+          </Field>
+        </div>
       </div>
+
+      <div className="card card-body stack">
+        <SectionHeader
+          icon={<StickyNote size={16} />}
+          title="Notes"
+          tint="amber"
+        />
+        <textarea
+          className="textarea"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={6}
+          placeholder="Any extra context (optional)"
+          style={{ minHeight: "8rem", resize: "vertical" }}
+        />
+      </div>
+
+      {error && <div className="alert alert-error">{error}</div>}
 
       {/* Sticky submit on mobile, inline on sm+ */}
       <div className="sticky-actions">
@@ -424,3 +444,4 @@ function Field({
     </div>
   );
 }
+

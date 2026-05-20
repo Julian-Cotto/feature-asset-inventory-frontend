@@ -1,10 +1,11 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, X } from "lucide-react";
 
 export interface SelectOption {
   value: string;
@@ -20,6 +21,11 @@ interface Props {
   className?: string;
   disabled?: boolean;
   size?: "sm" | "md";
+  /** When true, the trigger turns into a search input on open + filters
+   *  options as the user types. */
+  searchable?: boolean;
+  /** Placeholder shown inside the search input. */
+  searchPlaceholder?: string;
 }
 
 export default function Select({
@@ -30,6 +36,8 @@ export default function Select({
   className,
   disabled,
   size = "md",
+  searchable = false,
+  searchPlaceholder = "Search…",
 }: Props) {
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(() =>
@@ -38,7 +46,19 @@ export default function Select({
       options.findIndex((o) => o.value === value),
     ),
   );
+  const [searchTerm, setSearchTerm] = useState("");
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const filteredOptions = useMemo(() => {
+    if (!searchable || !searchTerm.trim()) return options;
+    const t = searchTerm.trim().toLowerCase();
+    return options.filter(
+      (o) =>
+        o.label.toLowerCase().includes(t) || o.value.toLowerCase().includes(t),
+    );
+  }, [options, searchable, searchTerm]);
 
   const current = options.find((o) => o.value === value);
 
@@ -56,20 +76,45 @@ export default function Select({
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
 
-  // Keep highlight aligned with current selection when value changes
+  // Reset search + autofocus the input when popover opens (searchable only)
   useEffect(() => {
-    const idx = options.findIndex((o) => o.value === value);
+    if (!open) {
+      setSearchTerm("");
+      return;
+    }
+    if (searchable) {
+      const t = setTimeout(() => searchInputRef.current?.focus(), 0);
+      return () => clearTimeout(t);
+    }
+  }, [open, searchable]);
+
+  // Highlight stays in range as filtered list changes
+  useEffect(() => {
+    if (highlight >= filteredOptions.length) {
+      setHighlight(filteredOptions.length > 0 ? 0 : 0);
+    }
+  }, [filteredOptions.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep highlight aligned with current selection when value changes (no search active)
+  useEffect(() => {
+    if (searchTerm) return;
+    const idx = filteredOptions.findIndex((o) => o.value === value);
     if (idx >= 0) setHighlight(idx);
-  }, [value, options]);
+  }, [value, options, searchTerm]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function commit(idx: number) {
-    const opt = options[idx];
+    const opt = filteredOptions[idx];
     if (!opt || opt.disabled) return;
     onChange(opt.value);
     setOpen(false);
   }
 
-  function onKey(e: ReactKeyboardEvent<HTMLButtonElement>) {
+  function clear() {
+    onChange("");
+    setOpen(false);
+  }
+
+  function onTriggerKey(e: ReactKeyboardEvent<HTMLDivElement>) {
     if (disabled) return;
     if (!open) {
       if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
@@ -87,7 +132,7 @@ export default function Select({
     }
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setHighlight((h) => Math.min(options.length - 1, h + 1));
+      setHighlight((h) => Math.min(filteredOptions.length - 1, h + 1));
       return;
     }
     if (e.key === "ArrowUp") {
@@ -102,59 +147,129 @@ export default function Select({
     }
   }
 
+  const showInput = open && searchable;
+
   return (
     <div ref={wrapperRef} className="select-wrapper">
-      <button
-        type="button"
+      <div
+        ref={triggerRef}
         className={
           "select select-trigger" +
           (className ? " " + className : "") +
-          (size === "sm" ? " select-trigger-sm" : "")
+          (size === "sm" ? " select-trigger-sm" : "") +
+          (disabled ? " opacity-50 cursor-not-allowed" : "")
         }
-        onClick={() => !disabled && setOpen((o) => !o)}
-        onKeyDown={onKey}
-        disabled={disabled}
+        role="combobox"
+        tabIndex={disabled ? -1 : 0}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-disabled={disabled || undefined}
+        onClick={() => !disabled && setOpen((o) => !o)}
+        onKeyDown={onTriggerKey}
       >
-        <span className={current ? "truncate" : "text-text-muted truncate"}>
-          {current?.label ?? placeholder}
-        </span>
-        <ChevronDown
-          size={14}
-          className={"select-chevron" + (open ? " select-chevron-open" : "")}
-          aria-hidden
-        />
-      </button>
-      {open && (
-        <ul
-          className="select-popover"
-          role="listbox"
-          tabIndex={-1}
-          aria-activedescendant={
-            options[highlight] ? `opt-${options[highlight].value}` : undefined
-          }
-        >
-          {options.map((o, i) => (
-            <li
-              key={o.value}
-              id={`opt-${o.value}`}
-              role="option"
-              aria-selected={o.value === value}
-              aria-disabled={o.disabled || undefined}
-              className={
-                "select-option" +
-                (i === highlight ? " select-option-highlight" : "") +
-                (o.value === value ? " select-option-selected" : "") +
-                (o.disabled ? " select-option-disabled" : "")
+        {showInput ? (
+          <input
+            ref={searchInputRef}
+            type="text"
+            className="select-trigger-input"
+            placeholder={searchPlaceholder}
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setHighlight(0);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setHighlight((h) =>
+                  Math.min(filteredOptions.length - 1, h + 1),
+                );
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setHighlight((h) => Math.max(0, h - 1));
+              } else if (e.key === "Enter") {
+                e.preventDefault();
+                commit(highlight);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setOpen(false);
               }
-              onMouseEnter={() => setHighlight(i)}
-              onClick={() => commit(i)}
+            }}
+          />
+        ) : (
+          <span
+            className={
+              "truncate" +
+              // Treat any empty value as placeholder — applies even when
+              // the caller registers an explicit `{ value: "", label: "—" }`
+              // option as a "clear" affordance (we have the red X for that).
+              (!current || current.value === "" ? " select-placeholder" : "")
+            }
+          >
+            {current?.label ?? placeholder}
+          </span>
+        )}
+        <div className="select-trigger-actions">
+          {value && !disabled && (
+            <button
+              type="button"
+              className="select-clear"
+              onClick={(e) => {
+                e.stopPropagation();
+                clear();
+              }}
+              aria-label="Clear selection"
+              title="Clear"
             >
-              {o.label}
-            </li>
-          ))}
-        </ul>
+              <X size={12} strokeWidth={2} />
+            </button>
+          )}
+          <ChevronDown
+            size={14}
+            className={"select-chevron" + (open ? " select-chevron-open" : "")}
+            aria-hidden
+          />
+        </div>
+      </div>
+      {open && (
+        <div className="select-popover" role="dialog">
+          <ul
+            className="select-options"
+            role="listbox"
+            tabIndex={-1}
+            aria-activedescendant={
+              filteredOptions[highlight]
+                ? `opt-${filteredOptions[highlight].value}`
+                : undefined
+            }
+          >
+            {filteredOptions.length === 0 && (
+              <li className="select-option text-text-muted text-xs">
+                No matches.
+              </li>
+            )}
+            {filteredOptions.map((o, i) => (
+              <li
+                key={o.value}
+                id={`opt-${o.value}`}
+                role="option"
+                aria-selected={o.value === value}
+                aria-disabled={o.disabled || undefined}
+                className={
+                  "select-option" +
+                  (i === highlight ? " select-option-highlight" : "") +
+                  (o.value === value ? " select-option-selected" : "") +
+                  (o.disabled ? " select-option-disabled" : "")
+                }
+                onMouseEnter={() => setHighlight(i)}
+                onClick={() => commit(i)}
+              >
+                {o.label}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

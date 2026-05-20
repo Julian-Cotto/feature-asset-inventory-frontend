@@ -34,12 +34,14 @@ export default function Deployments({ onSelect, onCreate }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [q, setQ] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
 
   const reload = async () => {
     try {
       const data = await listDeployments({
         status: statusFilter || undefined,
         q: q || undefined,
+        archived: showArchived,
         limit: 200,
       });
       setDeployments(data);
@@ -51,7 +53,7 @@ export default function Deployments({ onSelect, onCreate }: Props) {
 
   useEffect(() => {
     void reload();
-  }, [statusFilter]);
+  }, [statusFilter, showArchived]);
 
   return (
     <div className="stack-lg">
@@ -93,6 +95,18 @@ export default function Deployments({ onSelect, onCreate }: Props) {
         >
           Search
         </button>
+        <label
+          className="cluster text-sm text-text-muted cursor-pointer"
+          style={{ gap: "0.4rem" }}
+        >
+          <input
+            type="checkbox"
+            className="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+          />
+          Show archived
+        </label>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}

@@ -11,6 +11,7 @@ export interface DeploymentsQuery {
   status?: string;
   type?: string;
   q?: string;
+  archived?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -54,6 +55,15 @@ export const completeDeployment = (id: number) =>
 
 export const cancelDeployment = (id: number) =>
   apiPost<Deployment>(`/deployments/${id}/cancel`);
+
+export const archiveDeployment = (id: number) =>
+  apiPost<Deployment>(`/deployments/${id}/archive`);
+
+export const unarchiveDeployment = (id: number) =>
+  apiPost<Deployment>(`/deployments/${id}/unarchive`);
+
+export const deleteDeployment = (id: number) =>
+  apiDelete<void>(`/deployments/${id}`);
 
 export const createDeploymentShipment = (
   id: number,

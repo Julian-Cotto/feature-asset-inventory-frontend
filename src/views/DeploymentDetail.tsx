@@ -1,17 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
+import {
+  ArrowLeft,
+  Boxes,
+  MapPin,
+  Plus,
+  Truck,
+} from "lucide-react";
 
 import { listAssets } from "../services/inventory";
 import {
   addDeploymentItem,
+  archiveDeployment,
   cancelDeployment,
   completeDeployment,
+  deleteDeployment,
   getDeployment,
   removeDeploymentItem,
   startDeployment,
+  unarchiveDeployment,
 } from "../services/deployments";
 import type { Asset } from "../types/inventory";
 import type { Deployment, DeploymentStatus } from "../types/deployment";
 import { useConfirm } from "../components/ConfirmProvider";
+import { AccentPill, Avatar, SectionHeader } from "../components/visual";
 import { friendlyModel } from "../utils/friendlyModel";
 
 interface Props {
@@ -188,6 +199,33 @@ export default function DeploymentDetail({
     }
   }
 
+  async function doArchive() {
+    try {
+      if (d?.archived_at) await unarchiveDeployment(deploymentId);
+      else await archiveDeployment(deploymentId);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Archive failed");
+    }
+  }
+
+  async function doDelete() {
+    const ok = await confirm({
+      title: "Delete deployment?",
+      message:
+        "Permanently delete this deployment and its item list. Linked shipments will be unlinked (not deleted). Cannot be undone.",
+      tone: "danger",
+      confirmLabel: "Delete forever",
+    });
+    if (!ok) return;
+    try {
+      await deleteDeployment(deploymentId);
+      onBack();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
+
   if (!d) {
     return (
       <div className="stack">
@@ -211,7 +249,7 @@ export default function DeploymentDetail({
     <div className="stack-lg">
       <div className="cluster" style={{ justifyContent: "space-between" }}>
         <button type="button" className="btn btn-ghost btn-sm" onClick={onBack}>
-          ← Back
+          <ArrowLeft size={14} /> Back
         </button>
         <div className="cluster">
           {isPlanning && (
@@ -247,95 +285,177 @@ export default function DeploymentDetail({
               Cancel
             </button>
           )}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => void doArchive()}
+            title={d.archived_at ? "Restore from archive" : "Hide from default list"}
+          >
+            {d.archived_at ? "Unarchive" : "Archive"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger btn-sm"
+            onClick={() => void doDelete()}
+            title="Permanently delete"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+
+      <div
+        className="card card-body cluster"
+        style={{ gap: "0.875rem", alignItems: "center" }}
+      >
+        <Avatar seed={d.name} name={d.name} />
+        <div className="stack" style={{ gap: 2, minWidth: 0, flex: 1 }}>
+          <div
+            className="cluster"
+            style={{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}
+          >
+            <span className="heading-2" style={{ margin: 0 }}>
+              {d.name}
+            </span>
+            <span className={statusBadgeClass(d.status)}>
+              {STATUS_LABEL[d.status]}
+            </span>
+            {d.archived_at && (
+              <span className="badge badge-danger">Archived</span>
+            )}
+          </div>
+          <div className="cluster" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
+            {d.type && <AccentPill value={d.type} />}
+            {d.target_date && (
+              <span className="text-xs text-muted">
+                target {new Date(d.target_date).toLocaleDateString()}
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="stack" style={{ gap: 2, alignItems: "flex-end" }}>
+          <span className="text-xs eyebrow">Assets</span>
+          <span
+            className={
+              "badge " +
+              (d.items.length > 0 ? "badge-success" : "badge-neutral")
+            }
+            style={{ fontSize: "0.875rem" }}
+          >
+            {d.items.length}
+          </span>
         </div>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
 
-      {/* Header */}
-      <div className="card">
-        <div className="card-body stack">
-          <div className="cluster" style={{ justifyContent: "space-between" }}>
-            <h2 className="heading-2">{d.name}</h2>
-            <div className="cluster">
-              {d.type && <span className="badge">{d.type}</span>}
-              <span className={statusBadgeClass(d.status)}>
-                {STATUS_LABEL[d.status]}
-              </span>
-            </div>
+      <div className="card card-body stack">
+        <SectionHeader
+          icon={<MapPin size={16} />}
+          title="Target"
+          tint="info"
+        />
+        {d.description && <p className="text-sm">{d.description}</p>}
+        <div className="grid-2 text-sm">
+          <div className="stack" style={{ gap: 4 }}>
+            <span className="eyebrow">Location</span>
+            <span className="text-sm">{formatTargetAddress(d)}</span>
           </div>
-          {d.description && <p>{d.description}</p>}
-          <div className="grid-2 text-sm">
-            <div>
-              <div className="eyebrow">Target location</div>
-              <div className="text-muted">{formatTargetAddress(d)}</div>
-            </div>
-            <div>
-              <div className="eyebrow">Target date</div>
-              <div className="text-muted">
-                {d.target_date
-                  ? new Date(d.target_date).toLocaleDateString()
-                  : "—"}
-              </div>
-            </div>
+          <div className="stack" style={{ gap: 4 }}>
+            <span className="eyebrow">Date</span>
+            <span className="text-sm">
+              {d.target_date
+                ? new Date(d.target_date).toLocaleDateString()
+                : "—"}
+            </span>
           </div>
-          {d.notes && (
-            <div>
-              <div className="eyebrow">Notes</div>
-              <p className="text-muted text-sm">{d.notes}</p>
-            </div>
-          )}
         </div>
-      </div>
-
-      {/* Items */}
-      <section className="stack">
-        <h3 className="heading-3">Assets ({d.items.length})</h3>
-        {isPlanning && (
-          <div className="card">
-            <div className="card-body stack">
-              <Field label="Add asset (search by tag / serial / model)">
-                <input
-                  className="input"
-                  value={assetSearch}
-                  onChange={(e) => setAssetSearch(e.target.value)}
-                  placeholder="Type to search…"
-                />
-                {searchResults.length > 0 && (
-                  <div className="card mt-1">
-                    <ul className="list-clean">
-                      {searchResults.map((a) => (
-                        <li
-                          key={a.id}
-                          className="row-clickable px-3 py-2 border-b border-border"
-                          onClick={() => void handleAddItem(a)}
-                        >
-                          <span className="font-mono">{a.serial_number}</span>{" "}
-                          · {a.asset_type} · {a.manufacturer}{" "}
-                          {friendlyModel(a)}{" "}
-                          {a.assigned_upn && (
-                            <span
-                              className="badge badge-warning"
-                              title={`Currently assigned to ${a.assigned_upn}`}
-                            >
-                              assigned
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </Field>
-            </div>
+        {d.notes && (
+          <div className="stack" style={{ gap: 4 }}>
+            <span className="eyebrow">Notes</span>
+            <p className="text-sm text-muted">{d.notes}</p>
           </div>
         )}
-        <div className="card">
+      </div>
+
+      {isPlanning && (
+        <div className="card card-body stack">
+          <SectionHeader
+            icon={<Plus size={16} />}
+            title="Add asset"
+            tint="amber"
+          />
+          <input
+            className="input"
+            value={assetSearch}
+            onChange={(e) => setAssetSearch(e.target.value)}
+            placeholder="Search by tag / serial / model…"
+          />
+          {searchResults.length > 0 && (
+            <ul className="stack" style={{ gap: "0.375rem" }}>
+              {searchResults.map((a) => (
+                <li
+                  key={a.id}
+                  className="cluster row-clickable"
+                  style={{
+                    justifyContent: "space-between",
+                    gap: "0.5rem",
+                    padding: "0.5rem 0.625rem",
+                    borderRadius: 8,
+                    background: "rgb(var(--color-bg) / 0.4)",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => void handleAddItem(a)}
+                >
+                  <div
+                    className="cluster"
+                    style={{ gap: "0.625rem", flexWrap: "nowrap", minWidth: 0 }}
+                  >
+                    <Avatar
+                      seed={a.serial_number}
+                      name={a.asset_tag ?? a.serial_number}
+                    />
+                    <div className="stack" style={{ gap: 1, minWidth: 0 }}>
+                      <span className="font-medium truncate">
+                        {a.asset_tag ?? a.serial_number}
+                      </span>
+                      <span className="font-mono text-xs text-muted truncate">
+                        {a.manufacturer} {friendlyModel(a)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="cluster" style={{ gap: 4 }}>
+                    <AccentPill value={a.asset_type} />
+                    {a.assigned_upn && (
+                      <span
+                        className="badge badge-warning"
+                        title={`Currently assigned to ${a.assigned_upn}`}
+                      >
+                        assigned
+                      </span>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      <div className="card card-body stack">
+        <SectionHeader
+          icon={<Boxes size={16} />}
+          title={`Assets (${d.items.length})`}
+          tint="purple"
+        />
+        {d.items.length === 0 ? (
+          <p className="text-muted text-sm">No assets assigned yet.</p>
+        ) : (
           <div className="scroll-x">
             <table className="table">
               <thead>
                 <tr>
-                  <th>Asset tag</th>
+                  <th>Asset</th>
                   <th>Serial</th>
                   <th>Type</th>
                   <th>Model</th>
@@ -344,77 +464,110 @@ export default function DeploymentDetail({
                 </tr>
               </thead>
               <tbody>
-                {d.items.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.asset?.asset_tag ?? "—"}</td>
-                    <td className="font-mono">{item.asset?.serial_number}</td>
-                    <td>{item.asset?.asset_type}</td>
-                    <td>
-                      {item.asset?.manufacturer}{" "}
-                      {item.asset ? friendlyModel(item.asset) : ""}
-                    </td>
-                    <td>
-                      <span className="badge">{item.asset?.status_code}</span>
-                    </td>
-                    {isPlanning && (
+                {d.items.map((item) => {
+                  const seed =
+                    item.asset?.serial_number ?? String(item.id);
+                  const name =
+                    item.asset?.asset_tag ??
+                    item.asset?.serial_number ??
+                    "—";
+                  return (
+                    <tr key={item.id}>
                       <td>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => void handleRemoveItem(item.id)}
+                        <div
+                          className="cluster"
+                          style={{ gap: "0.625rem", flexWrap: "nowrap" }}
                         >
-                          Remove
-                        </button>
+                          <Avatar seed={seed} name={name} />
+                          <span className="font-medium truncate">
+                            {item.asset?.asset_tag ?? "—"}
+                          </span>
+                        </div>
                       </td>
-                    )}
-                  </tr>
-                ))}
+                      <td className="font-mono">{item.asset?.serial_number}</td>
+                      <td>
+                        <AccentPill value={item.asset?.asset_type ?? null} />
+                      </td>
+                      <td>
+                        {item.asset?.manufacturer}{" "}
+                        {item.asset ? friendlyModel(item.asset) : ""}
+                      </td>
+                      <td>
+                        <AccentPill value={item.asset?.status_code ?? null} />
+                      </td>
+                      {isPlanning && (
+                        <td>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => void handleRemoveItem(item.id)}
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-          {d.items.length === 0 && (
-            <p className="text-muted text-sm p-4">No assets assigned yet.</p>
-          )}
-        </div>
-      </section>
+        )}
+      </div>
 
-      {/* Shipments */}
-      <section className="stack">
-        <h3 className="heading-3">Shipments ({d.shipments.length})</h3>
+      <div className="card card-body stack">
+        <SectionHeader
+          icon={<Truck size={16} />}
+          title={`Shipments (${d.shipments.length})`}
+          tint="teal"
+        />
         {d.shipments.length === 0 ? (
           <p className="text-muted text-sm">
             No shipments linked. Create or link one from the Shipments tab.
           </p>
         ) : (
-          <ul className="list-clean stack">
+          <ul className="stack" style={{ gap: "0.5rem" }}>
             {d.shipments.map((s) => (
               <li
                 key={s.id}
-                className={`card card-body ${onShipmentClick ? "cursor-pointer transition-colors hover:bg-surface-muted" : ""}`}
+                className={onShipmentClick ? "row-clickable" : ""}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  padding: "0.5rem 0.625rem",
+                  borderRadius: 8,
+                  background: "rgb(var(--color-bg) / 0.4)",
+                  cursor: onShipmentClick ? "pointer" : undefined,
+                }}
                 onClick={() => onShipmentClick?.(s.id)}
               >
-                <div className="cluster" style={{ justifyContent: "space-between" }}>
-                  <div className="cluster">
-                    <span className="font-mono">{s.tracking_number}</span>
-                    <span className="badge">{s.carrier.toUpperCase()}</span>
-                    <span className="badge">{s.direction}</span>
+                <div
+                  className="cluster"
+                  style={{ gap: "0.625rem", flexWrap: "nowrap", minWidth: 0 }}
+                >
+                  <Avatar seed={s.tracking_number} name={s.carrier.toUpperCase()} />
+                  <div className="stack" style={{ gap: 1, minWidth: 0 }}>
+                    <span className="font-mono truncate">
+                      {s.tracking_number}
+                    </span>
+                    <div
+                      className="cluster"
+                      style={{ gap: 4, flexWrap: "wrap" }}
+                    >
+                      <AccentPill value={s.carrier.toUpperCase()} />
+                      <AccentPill value={s.direction} />
+                    </div>
                   </div>
-                  <span className="badge">{s.carrier_status}</span>
                 </div>
+                <span className="badge">{s.carrier_status}</span>
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </div>
     </div>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="field">
-      <label className="label">{label}</label>
-      {children}
-    </div>
-  );
-}

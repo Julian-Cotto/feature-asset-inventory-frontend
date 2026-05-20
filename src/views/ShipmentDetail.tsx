@@ -1,11 +1,21 @@
 import { useEffect, useState } from "react";
+import {
+  ArrowLeft,
+  Boxes,
+  History,
+  MapPin,
+  RefreshCw,
+} from "lucide-react";
 
 import {
+  archiveShipment,
   cancelShipment,
+  deleteShipment,
   getShipment,
   refreshShipment,
   removeShipmentItem,
   resolveShipment,
+  unarchiveShipment,
 } from "../services/shipments";
 import type {
   Shipment,
@@ -13,6 +23,12 @@ import type {
   ShipmentEvent,
 } from "../types/shipment";
 import { useConfirm } from "../components/ConfirmProvider";
+import {
+  AccentPill,
+  Avatar,
+  FreshnessCell,
+  SectionHeader,
+} from "../components/visual";
 import { friendlyModel } from "../utils/friendlyModel";
 
 interface Props {
@@ -123,6 +139,34 @@ export default function ShipmentDetail({ shipmentId, onBack }: Props) {
     }
   }
 
+  async function doArchive() {
+    try {
+      const data = shipment?.archived_at
+        ? await unarchiveShipment(shipmentId)
+        : await archiveShipment(shipmentId);
+      setShipment(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Archive failed");
+    }
+  }
+
+  async function doDelete() {
+    const ok = await confirm({
+      title: "Delete shipment?",
+      message:
+        "Permanently delete this shipment along with its items and events. Cannot be undone.",
+      tone: "danger",
+      confirmLabel: "Delete forever",
+    });
+    if (!ok) return;
+    try {
+      await deleteShipment(shipmentId);
+      onBack();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
+
   async function doRemoveItem(itemId: number) {
     const ok = await confirm({
       title: "Remove asset?",
@@ -164,7 +208,7 @@ export default function ShipmentDetail({ shipmentId, onBack }: Props) {
     <div className="stack-lg">
       <div className="cluster" style={{ justifyContent: "space-between" }}>
         <button type="button" className="btn btn-ghost btn-sm" onClick={onBack}>
-          ← Back
+          <ArrowLeft size={14} /> Back
         </button>
         <div className="cluster">
           <button
@@ -173,6 +217,11 @@ export default function ShipmentDetail({ shipmentId, onBack }: Props) {
             onClick={() => void doRefresh()}
             disabled={refreshing}
           >
+            <RefreshCw
+              size={14}
+              className={refreshing ? "animate-spin" : ""}
+              strokeWidth={1.75}
+            />
             {refreshing ? "Refreshing…" : "Refresh"}
           </button>
           {isOpen && shipment.carrier_status === "delivered" && (
@@ -193,131 +242,219 @@ export default function ShipmentDetail({ shipmentId, onBack }: Props) {
               Cancel
             </button>
           )}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => void doArchive()}
+            title={shipment.archived_at ? "Restore from archive" : "Hide from default list"}
+          >
+            {shipment.archived_at ? "Unarchive" : "Archive"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger btn-sm"
+            onClick={() => void doDelete()}
+            title="Permanently delete"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+
+      <div
+        className="card card-body cluster"
+        style={{ gap: "0.875rem", alignItems: "center" }}
+      >
+        <Avatar
+          seed={shipment.tracking_number}
+          name={shipment.carrier.toUpperCase()}
+        />
+        <div className="stack" style={{ gap: 2, minWidth: 0, flex: 1 }}>
+          <div
+            className="cluster"
+            style={{ gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}
+          >
+            <span className="heading-2 font-mono" style={{ margin: 0 }}>
+              {shipment.tracking_number}
+            </span>
+            {shipment.archived_at && (
+              <span className="badge badge-danger">Archived</span>
+            )}
+          </div>
+          <div className="cluster" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
+            <AccentPill value={shipment.carrier.toUpperCase()} />
+            <span className={carrierStatusBadgeClass(shipment.carrier_status)}>
+              {CARRIER_STATUS_LABEL[shipment.carrier_status]}
+            </span>
+            <span
+              className={
+                shipment.resolution === "resolved"
+                  ? "badge badge-success"
+                  : shipment.resolution === "cancelled"
+                    ? "badge badge-danger"
+                    : "badge"
+              }
+            >
+              {shipment.resolution}
+            </span>
+            <AccentPill value={shipment.direction} />
+          </div>
+        </div>
+        <div className="stack" style={{ gap: 2, alignItems: "flex-end" }}>
+          <span className="text-xs eyebrow">Last refreshed</span>
+          <FreshnessCell
+            iso={shipment.last_polled_at}
+            fallback="never refreshed"
+          />
         </div>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
+      {shipment.last_poll_error && (
+        <div className="alert alert-warning">
+          Last refresh: {shipment.last_poll_error}
+        </div>
+      )}
 
-      {/* Header */}
-      <div className="card">
-        <div className="card-body stack">
-          <div className="cluster" style={{ justifyContent: "space-between" }}>
-            <h2 className="heading-2 font-mono">{shipment.tracking_number}</h2>
-            <div className="cluster">
-              <span className="badge">{shipment.carrier.toUpperCase()}</span>
-              <span className={carrierStatusBadgeClass(shipment.carrier_status)}>
-                {CARRIER_STATUS_LABEL[shipment.carrier_status]}
-              </span>
-              <span
-                className={
-                  shipment.resolution === "resolved"
-                    ? "badge badge-success"
-                    : shipment.resolution === "cancelled"
-                      ? "badge badge-danger"
-                      : "badge"
-                }
-              >
-                {shipment.resolution}
-              </span>
-              <span className="badge">{shipment.direction}</span>
-            </div>
+      <div className="card card-body stack">
+        <SectionHeader
+          icon={<MapPin size={16} />}
+          title="Routing"
+          tint="info"
+        />
+        {shipment.description && (
+          <p className="text-sm">{shipment.description}</p>
+        )}
+        <div className="grid-2 text-sm">
+          <div className="stack" style={{ gap: 4 }}>
+            <span className="eyebrow">From</span>
+            <span className="text-sm">{formatAddress(shipment, "from")}</span>
           </div>
-          {shipment.description && <p>{shipment.description}</p>}
-          {shipment.last_poll_error && (
-            <div className="alert alert-warning">
-              Last refresh: {shipment.last_poll_error}
-            </div>
-          )}
-          <div className="grid-2 text-sm">
-            <div>
-              <div className="eyebrow">From</div>
-              <div className="text-muted">{formatAddress(shipment, "from")}</div>
-            </div>
-            <div>
-              <div className="eyebrow">To</div>
-              <div className="text-muted">{formatAddress(shipment, "to")}</div>
-            </div>
-          </div>
-          {shipment.notes && (
-            <div className="text-sm">
-              <div className="eyebrow">Notes</div>
-              <p className="text-muted">{shipment.notes}</p>
-            </div>
-          )}
-          <div className="text-muted text-xs">
-            {shipment.last_polled_at
-              ? `Last refreshed ${new Date(shipment.last_polled_at).toLocaleString()}`
-              : "Not yet refreshed"}
+          <div className="stack" style={{ gap: 4 }}>
+            <span className="eyebrow">To</span>
+            <span className="text-sm">{formatAddress(shipment, "to")}</span>
           </div>
         </div>
+        {shipment.notes && (
+          <div className="stack" style={{ gap: 4 }}>
+            <span className="eyebrow">Notes</span>
+            <p className="text-sm text-muted">{shipment.notes}</p>
+          </div>
+        )}
       </div>
 
-      {/* Items */}
-      <section className="stack">
-        <h3 className="heading-3">Items ({shipment.items.length})</h3>
-        <div className="card">
+      <div className="card card-body stack">
+        <SectionHeader
+          icon={<Boxes size={16} />}
+          title={`Items (${shipment.items.length})`}
+          tint="purple"
+        />
+        {shipment.items.length === 0 ? (
+          <p className="text-muted text-sm">No assets on this shipment.</p>
+        ) : (
           <div className="scroll-x">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Asset tag</th>
-                <th>Serial</th>
-                <th>Type</th>
-                <th>Model</th>
-                <th>Status</th>
-                {isOpen && <th></th>}
-              </tr>
-            </thead>
-            <tbody>
-              {shipment.items.map((item) => (
-                <tr key={item.id}>
-                  <td>{item.asset?.asset_tag ?? "—"}</td>
-                  <td className="font-mono">{item.asset?.serial_number}</td>
-                  <td>{item.asset?.asset_type}</td>
-                  <td>
-                    {item.asset?.manufacturer}{" "}
-                    {item.asset ? friendlyModel(item.asset) : ""}
-                  </td>
-                  <td>
-                    <span className="badge">{item.asset?.status_code}</span>
-                  </td>
-                  {isOpen && (
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => void doRemoveItem(item.id)}
-                      >
-                        Remove
-                      </button>
-                    </td>
-                  )}
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th>Serial</th>
+                  <th>Type</th>
+                  <th>Model</th>
+                  <th>Status</th>
+                  {isOpen && <th></th>}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {shipment.items.map((item) => {
+                  const seed =
+                    item.asset?.serial_number ?? String(item.id);
+                  const name =
+                    item.asset?.asset_tag ??
+                    item.asset?.serial_number ??
+                    "—";
+                  return (
+                    <tr key={item.id}>
+                      <td>
+                        <div
+                          className="cluster"
+                          style={{ gap: "0.625rem", flexWrap: "nowrap" }}
+                        >
+                          <Avatar seed={seed} name={name} />
+                          <span className="font-medium truncate">
+                            {item.asset?.asset_tag ?? "—"}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="font-mono">{item.asset?.serial_number}</td>
+                      <td>
+                        <AccentPill value={item.asset?.asset_type ?? null} />
+                      </td>
+                      <td>
+                        {item.asset?.manufacturer}{" "}
+                        {item.asset ? friendlyModel(item.asset) : ""}
+                      </td>
+                      <td>
+                        <AccentPill value={item.asset?.status_code ?? null} />
+                      </td>
+                      {isOpen && (
+                        <td>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => void doRemoveItem(item.id)}
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-        </div>
-      </section>
+        )}
+      </div>
 
-      {/* Events */}
-      <section className="stack">
-        <h3 className="heading-3">Carrier events ({sortedEvents.length})</h3>
+      <div className="card card-body stack">
+        <SectionHeader
+          icon={<History size={16} />}
+          title={`Carrier events (${sortedEvents.length})`}
+          tint="amber"
+        />
         {sortedEvents.length === 0 ? (
           <p className="text-muted text-sm">No carrier events yet.</p>
         ) : (
-          <ul className="list-clean stack">
+          <ul className="stack" style={{ gap: "0.5rem" }}>
             {sortedEvents.map((ev) => (
-              <li key={ev.id} className="card card-body">
-                <div className="cluster" style={{ justifyContent: "space-between" }}>
+              <li
+                key={ev.id}
+                className="stack"
+                style={{
+                  gap: 4,
+                  padding: "0.625rem 0.75rem",
+                  borderRadius: 8,
+                  background: "rgb(var(--color-bg) / 0.4)",
+                  borderLeft: "3px solid rgb(var(--color-primary))",
+                }}
+              >
+                <div
+                  className="cluster"
+                  style={{ justifyContent: "space-between" }}
+                >
                   <span className={carrierStatusBadgeClass(ev.status)}>
                     {CARRIER_STATUS_LABEL[ev.status]}
                   </span>
-                  <span className="text-muted text-xs">
+                  <span
+                    className="text-muted text-xs"
+                    title={new Date(ev.occurred_at).toLocaleString()}
+                  >
                     {new Date(ev.occurred_at).toLocaleString()}
                   </span>
                 </div>
-                {ev.description && <p className="mt-1">{ev.description}</p>}
+                {ev.description && (
+                  <p className="text-sm">{ev.description}</p>
+                )}
                 {ev.location && (
                   <p className="text-muted text-xs">{ev.location}</p>
                 )}
@@ -325,7 +462,7 @@ export default function ShipmentDetail({ shipmentId, onBack }: Props) {
             ))}
           </ul>
         )}
-      </section>
+      </div>
     </div>
   );
 }

@@ -59,6 +59,7 @@ export default function Shipments({ onSelect, onCreate }: Props) {
   const [direction, setDirection] = useState("");
   const [resolution, setResolution] = useState("");
   const [q, setQ] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
 
   const reload = async () => {
     try {
@@ -66,6 +67,7 @@ export default function Shipments({ onSelect, onCreate }: Props) {
         direction: direction || undefined,
         resolution: resolution || undefined,
         q: q || undefined,
+        archived: showArchived,
         limit: 200,
       });
       setShipments(data);
@@ -77,7 +79,7 @@ export default function Shipments({ onSelect, onCreate }: Props) {
 
   useEffect(() => {
     void reload();
-  }, [direction, resolution]);
+  }, [direction, resolution, showArchived]);
 
   return (
     <div className="stack-lg">
@@ -124,6 +126,18 @@ export default function Shipments({ onSelect, onCreate }: Props) {
         >
           Search
         </button>
+        <label
+          className="cluster text-sm text-text-muted cursor-pointer"
+          style={{ gap: "0.4rem" }}
+        >
+          <input
+            type="checkbox"
+            className="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+          />
+          Show archived
+        </label>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
