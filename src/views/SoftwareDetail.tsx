@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { useConfirm } from "../components/ConfirmProvider";
+import EntityHistoryList from "../components/EntityHistoryList";
 import { useToast } from "../components/ToastProvider";
 import Select from "../components/Select";
 import {
@@ -23,10 +24,12 @@ import {
   archiveSoftware,
   deleteAssignment,
   getSoftware,
+  getSoftwareUsersByCompany,
   listAssignments,
   unarchiveSoftware,
   updateSoftware,
 } from "../services/software";
+import type { SoftwareUsersByCompany } from "../services/software";
 import { listUsers } from "../services/users";
 import type { EntraGroup } from "../types/group";
 import type { IntuneUser } from "../types/user";
@@ -39,6 +42,8 @@ import type {
 interface Props {
   softwareId: number;
   onBack: () => void;
+  onGroupClick?: (groupId: string) => void;
+  onUserClick?: (userId: string) => void;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -59,12 +64,20 @@ function formatCost(cents: number | null): string {
   });
 }
 
-export default function SoftwareDetail({ softwareId, onBack }: Props) {
+export default function SoftwareDetail({
+  softwareId,
+  onBack,
+  onGroupClick,
+  onUserClick,
+}: Props) {
   const confirm = useConfirm();
   const toast = useToast();
 
   const [software, setSoftware] = useState<Software | null>(null);
   const [assignments, setAssignments] = useState<SoftwareAssignment[]>([]);
+  const [byCompany, setByCompany] = useState<SoftwareUsersByCompany | null>(null);
+  const [includeGroups, setIncludeGroups] = useState(false);
+  const [expandingGroups, setExpandingGroups] = useState(false);
   const [groups, setGroups] = useState<EntraGroup[]>([]);
   const [users, setUsers] = useState<IntuneUser[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -78,16 +91,32 @@ export default function SoftwareDetail({ softwareId, onBack }: Props) {
 
   const reload = async () => {
     try {
-      const [sw, asn] = await Promise.all([
+      const [sw, asn, byco] = await Promise.all([
         getSoftware(softwareId),
         listAssignments(softwareId),
+        getSoftwareUsersByCompany(softwareId, includeGroups).catch(() => null),
       ]);
       setSoftware(sw);
       setAssignments(asn);
+      setByCompany(byco);
       setDraft({});
       setDirty(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const toggleGroupExpansion = async () => {
+    const next = !includeGroups;
+    setIncludeGroups(next);
+    setExpandingGroups(true);
+    try {
+      const res = await getSoftwareUsersByCompany(softwareId, next);
+      setByCompany(res);
+    } catch {
+      /* keep prior data */
+    } finally {
+      setExpandingGroups(false);
     }
   };
 
@@ -582,23 +611,45 @@ export default function SoftwareDetail({ softwareId, onBack }: Props) {
                   background: "rgb(var(--color-bg) / 0.4)",
                 }}
               >
-                <div
+                <button
+                  type="button"
+                  onClick={() => onGroupClick?.(a.principal_id)}
+                  disabled={!onGroupClick}
                   className="cluster"
-                  style={{ gap: "0.625rem", flexWrap: "nowrap", minWidth: 0 }}
+                  style={{
+                    gap: "0.625rem",
+                    flexWrap: "nowrap",
+                    minWidth: 0,
+                    background: "transparent",
+                    border: "none",
+                    padding: 0,
+                    cursor: onGroupClick ? "pointer" : "default",
+                    color: "rgb(var(--color-text))",
+                    textAlign: "left",
+                    flex: 1,
+                  }}
+                  title={onGroupClick ? "Open group" : undefined}
                 >
                   <Avatar
                     seed={a.principal_id}
                     name={a.principal_display ?? a.principal_id}
                   />
                   <div className="stack" style={{ gap: 1, minWidth: 0 }}>
-                    <span className="font-medium truncate">
+                    <span
+                      className="font-medium truncate"
+                      style={{
+                        color: onGroupClick
+                          ? "rgb(var(--color-primary))"
+                          : undefined,
+                      }}
+                    >
                       {a.principal_display ?? a.principal_id}
                     </span>
                     <span className="font-mono text-xs text-muted truncate">
                       {a.principal_id}
                     </span>
                   </div>
-                </div>
+                </button>
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
@@ -636,23 +687,45 @@ export default function SoftwareDetail({ softwareId, onBack }: Props) {
                   background: "rgb(var(--color-bg) / 0.4)",
                 }}
               >
-                <div
+                <button
+                  type="button"
+                  onClick={() => onUserClick?.(a.principal_id)}
+                  disabled={!onUserClick}
                   className="cluster"
-                  style={{ gap: "0.625rem", flexWrap: "nowrap", minWidth: 0 }}
+                  style={{
+                    gap: "0.625rem",
+                    flexWrap: "nowrap",
+                    minWidth: 0,
+                    background: "transparent",
+                    border: "none",
+                    padding: 0,
+                    cursor: onUserClick ? "pointer" : "default",
+                    color: "rgb(var(--color-text))",
+                    textAlign: "left",
+                    flex: 1,
+                  }}
+                  title={onUserClick ? "Open user" : undefined}
                 >
                   <Avatar
                     seed={a.principal_id}
                     name={a.principal_display ?? a.principal_id}
                   />
                   <div className="stack" style={{ gap: 1, minWidth: 0 }}>
-                    <span className="font-medium truncate">
+                    <span
+                      className="font-medium truncate"
+                      style={{
+                        color: onUserClick
+                          ? "rgb(var(--color-primary))"
+                          : undefined,
+                      }}
+                    >
                       {a.principal_display ?? a.principal_id}
                     </span>
                     <span className="font-mono text-xs text-muted truncate">
                       {a.principal_id}
                     </span>
                   </div>
-                </div>
+                </button>
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
@@ -667,6 +740,103 @@ export default function SoftwareDetail({ softwareId, onBack }: Props) {
           </ul>
         )}
       </div>
+
+      {byCompany && (byCompany.groups.length > 0 || byCompany.group_assignment_count > 0) && (
+        <div className="card card-body stack">
+          <div
+            className="cluster"
+            style={{ justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}
+          >
+            <SectionHeader
+              icon={<UsersIcon size={16} />}
+              title={`Users by company (${byCompany.groups.length})`}
+              tint="teal"
+            />
+            {byCompany.group_assignment_count > 0 && (
+              <button
+                type="button"
+                className={`btn btn-sm ${includeGroups ? "btn-primary" : "btn-secondary"}`}
+                onClick={() => void toggleGroupExpansion()}
+                disabled={expandingGroups}
+              >
+                {expandingGroups
+                  ? "Expanding…"
+                  : includeGroups
+                    ? "Direct only"
+                    : `Include group members (${byCompany.group_assignment_count})`}
+              </button>
+            )}
+          </div>
+          <p className="text-muted text-xs" style={{ margin: 0 }}>
+            {includeGroups
+              ? byCompany.groups_expanded
+                ? "Direct + group-inherited users, grouped by company (vertical). Group members fetched live from Entra."
+                : "Group expansion requested but Graph was unavailable — showing direct assignments only."
+              : `Directly-assigned users grouped by company (vertical). ${byCompany.group_assignment_count} group assignment(s) not expanded.`}
+          </p>
+          <div className="stack" style={{ gap: "0.75rem" }}>
+            {byCompany.groups.map((g) => (
+              <div key={g.company} className="stack" style={{ gap: "0.3rem" }}>
+                <div
+                  className="cluster"
+                  style={{ justifyContent: "space-between", alignItems: "baseline" }}
+                >
+                  <span className="font-medium">{g.company}</span>
+                  <span className="badge badge-info">{g.count}</span>
+                </div>
+                <ul className="stack" style={{ gap: "0.2rem" }}>
+                  {g.users.map((u) => (
+                    <li key={u.id}>
+                      <button
+                        type="button"
+                        onClick={() => onUserClick?.(u.id)}
+                        disabled={!onUserClick}
+                        className="cluster"
+                        style={{
+                          gap: "0.5rem",
+                          width: "100%",
+                          justifyContent: "space-between",
+                          padding: "0.35rem 0.6rem",
+                          borderRadius: 8,
+                          background: "rgb(var(--color-bg) / 0.4)",
+                          border: "none",
+                          cursor: onUserClick ? "pointer" : "default",
+                          color: "rgb(var(--color-text))",
+                          textAlign: "left",
+                        }}
+                        title={onUserClick ? "Open user" : undefined}
+                      >
+                        <span
+                          className="truncate"
+                          style={{
+                            color: onUserClick ? "rgb(var(--color-primary))" : undefined,
+                          }}
+                        >
+                          {u.display_name ?? u.user_principal_name}
+                        </span>
+                        <span className="cluster" style={{ gap: "0.4rem", flexShrink: 0 }}>
+                          {u.via === "group" && (
+                            <span className="badge badge-info" title="Inherited via group membership">
+                              group
+                            </span>
+                          )}
+                          {u.department && (
+                            <span className="text-xs text-muted truncate">
+                              {u.department}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <EntityHistoryList entityType="software" entityId={softwareId} />
     </div>
   );
 }

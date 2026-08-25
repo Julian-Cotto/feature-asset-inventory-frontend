@@ -8,7 +8,9 @@ import {
 } from "lucide-react";
 
 import { useConfirm } from "../components/ConfirmProvider";
+import ExportDropdown from "../components/ExportDropdown";
 import { useToast } from "../components/ToastProvider";
+import { downloadNetworksExport } from "../services/exports";
 import {
   AccentPill,
   FreshnessCell,
@@ -103,20 +105,26 @@ export default function Networks({ onSelect }: Props) {
     <div className="stack-lg">
       <div className="cluster" style={{ justifyContent: "space-between" }}>
         <h2 className="heading-2">Networks</h2>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={() => void doSync()}
-          disabled={syncing}
-          title="Pull all networks from Meraki + relink assets"
-        >
-          <RefreshCw
-            size={14}
-            className={syncing ? "animate-spin" : ""}
-            strokeWidth={1.75}
+        <div className="cluster" style={{ gap: "0.5rem" }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => void doSync()}
+            disabled={syncing}
+            title="Pull all networks from Meraki + relink assets"
+          >
+            <RefreshCw
+              size={14}
+              className={syncing ? "animate-spin" : ""}
+              strokeWidth={1.75}
+            />
+            {syncing ? "Syncing…" : "Sync from Meraki"}
+          </button>
+          <ExportDropdown
+            entityName="networks"
+            onExport={(fmt) => downloadNetworksExport(fmt)}
           />
-          {syncing ? "Syncing…" : "Sync from Meraki"}
-        </button>
+        </div>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}

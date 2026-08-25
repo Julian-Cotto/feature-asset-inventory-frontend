@@ -45,6 +45,53 @@ export const updateLocation = (
 export const deleteLocation = (id: number) =>
   apiDelete<void>(`/locations/${id}`);
 
+export interface LocationBulkResult {
+  requested: number;
+  updated: number;
+  skipped: number;
+}
+
+export const bulkSetLocationsActive = (ids: number[], is_active: boolean) =>
+  apiPost<LocationBulkResult>("/locations/bulk-set-active", {
+    ids,
+    is_active,
+  });
+
+export interface LocationReservationDeploymentRow {
+  id: number;
+  name: string;
+  type: string | null;
+  status: string;
+  target_date: string | null;
+  item_count: number;
+}
+
+export interface LocationReservationShipmentRow {
+  id: number;
+  label: string;
+  carrier: string | null;
+  tracking_number: string | null;
+  carrier_status: string | null;
+  direction: "inbound" | "outbound";
+  item_count: number;
+  created_at: string;
+}
+
+export interface LocationReservations {
+  location_id: number;
+  deployments: LocationReservationDeploymentRow[];
+  shipments_inbound: LocationReservationShipmentRow[];
+  shipments_outbound: LocationReservationShipmentRow[];
+}
+
+export const getLocationReservations = (
+  id: number,
+  includeArchived = false,
+) =>
+  apiGet<LocationReservations>(
+    `/locations/${id}/reservations${includeArchived ? "?include_archived=true" : ""}`,
+  );
+
 // assets
 export interface AssetsQuery {
   q?: string;
@@ -117,6 +164,44 @@ export const lookupAssetBySerial = (serial: string) =>
 
 export const onboardAsset = (payload: AssetCreatePayload) =>
   apiPost<Asset>("/assets", payload);
+
+export type MerakiClaimStatus =
+  | "claimed"
+  | "already_in_org"
+  | "claimed_elsewhere"
+  | "invalid"
+  | "meraki_disabled"
+  | "error";
+
+export interface MerakiClaimResult {
+  serial: string;
+  status: MerakiClaimStatus;
+  ok: boolean;
+  message: string;
+  checked_at?: string | null;
+}
+
+export const claimMerakiSerial = (serial: string, asset_id?: number) =>
+  apiPost<MerakiClaimResult>("/meraki/claim", { serial, asset_id });
+
+export interface BulkMerakiClaimItem {
+  asset_id: number;
+  serial: string;
+  status: MerakiClaimStatus | "invalid";
+  ok: boolean;
+  message: string;
+}
+
+export interface BulkMerakiClaimResult {
+  requested: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  items: BulkMerakiClaimItem[];
+}
+
+export const bulkMerakiClaim = (asset_ids: number[]) =>
+  apiPost<BulkMerakiClaimResult>("/assets/bulk-meraki-claim", { asset_ids });
 
 export interface BulkLocationResult {
   updated: number;
@@ -234,8 +319,12 @@ export const syncLocationsFromSnowflake = (dryRun = false) =>
 export const getDashboardStats = () => apiGet<DashboardStats>(`/stats`);
 
 // reservations
-export const listReservations = () =>
-  apiGet<ReservationRow[]>(`/reservations`);
+export const listReservations = (assignedUpn?: string) => {
+  const qs = assignedUpn
+    ? `?assigned_upn=${encodeURIComponent(assignedUpn)}`
+    : "";
+  return apiGet<ReservationRow[]>(`/reservations${qs}`);
+};
 
 // reports
 import type {

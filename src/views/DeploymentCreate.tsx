@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft, ClipboardList, Cpu, MapPin, StickyNote } from "lucide-react";
 
 import DatePicker from "../components/DatePicker";
 import Select from "../components/Select";
+import { SectionHeader } from "../components/visual";
 import { locationLabel } from "../utils/locationLabel";
 import {
   getAssetFacets,
@@ -26,6 +28,12 @@ const ASSET_TYPE_OPTIONS: { value: AssetType; label: string }[] = [
   { value: "ap", label: "Access point" },
   { value: "switch", label: "Switch" },
   { value: "gateway", label: "Gateway" },
+  { value: "pos_aio", label: "POS (Windows AIO)" },
+  { value: "pos_thin_client", label: "POS (thin client)" },
+  { value: "pos_tablet", label: "POS tablet" },
+  { value: "card_reader", label: "Credit card reader" },
+  { value: "printer_office", label: "Office printer" },
+  { value: "printer_receipt", label: "Receipt printer" },
 ];
 
 const TYPE_SUGGESTIONS = [
@@ -201,15 +209,19 @@ export default function DeploymentCreate({ onCreated, onCancel }: Props) {
       <div className="cluster" style={{ justifyContent: "space-between" }}>
         <h2 className="heading-2">New deployment</h2>
         <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>
-          ← Back
+          <ArrowLeft size={14} /> Back
         </button>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
 
-      <div className="stack-lg max-w-xl">
-        <section className="section-block">
-          <span className="eyebrow">Identify</span>
+      <div className="stack-lg">
+        <section className="card stack" style={{ padding: "1.5rem" }}>
+          <SectionHeader
+            icon={<ClipboardList size={18} />}
+            title="Identify"
+            tint="purple"
+          />
           <Field label="Name">
               <input
                 className="input"
@@ -241,8 +253,12 @@ export default function DeploymentCreate({ onCreated, onCancel }: Props) {
             </Field>
         </section>
 
-        <section className="section-block">
-          <span className="eyebrow">Target location</span>
+        <section className="card stack" style={{ padding: "1.5rem" }}>
+          <SectionHeader
+            icon={<MapPin size={18} />}
+            title="Target location"
+            tint="info"
+          />
           <Field label="Saved location (optional)">
               <Select
                 value={targetLocationId === "" ? "" : String(targetLocationId)}
@@ -347,8 +363,12 @@ export default function DeploymentCreate({ onCreated, onCancel }: Props) {
             </div>
         </section>
 
-        <section className="section-block">
-          <span className="eyebrow">Assets (optional)</span>
+        <section className="card stack" style={{ padding: "1.5rem" }}>
+          <SectionHeader
+            icon={<Cpu size={18} />}
+            title="Assets (optional)"
+            tint="green"
+          />
           <div className="cluster">
               <button
                 type="button"
@@ -585,8 +605,12 @@ export default function DeploymentCreate({ onCreated, onCancel }: Props) {
             )}
         </section>
 
-        <section className="section-block">
-          <span className="eyebrow">Notes</span>
+        <section className="card stack" style={{ padding: "1.5rem" }}>
+          <SectionHeader
+            icon={<StickyNote size={18} />}
+            title="Notes"
+            tint="amber"
+          />
           <textarea
             className="textarea"
             rows={3}

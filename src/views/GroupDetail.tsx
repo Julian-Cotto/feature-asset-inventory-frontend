@@ -29,6 +29,7 @@ interface Props {
   groupId: string;
   onBack: () => void;
   onOpenSoftware: (softwareId: number) => void;
+  onMemberClick?: (userId: string) => void;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -57,6 +58,7 @@ export default function GroupDetailView({
   groupId,
   onBack,
   onOpenSoftware,
+  onMemberClick,
 }: Props) {
   const toast = useToast();
   const [detail, setDetail] = useState<GroupDetail | null>(null);
@@ -311,15 +313,34 @@ export default function GroupDetailView({
               <tbody>
                 {filteredMembers.map((m) => {
                   const seed = m.user_principal_name ?? m.mail ?? m.id;
+                  // Only `user` rows route to UserDetail — nested groups,
+                  // devices, etc. don't have a detail view yet.
+                  const isUser = m.member_type === "user";
+                  const canClick = isUser && !!onMemberClick;
+                  const handleOpen = canClick
+                    ? () => onMemberClick(m.id)
+                    : undefined;
                   return (
-                    <tr key={m.id}>
+                    <tr
+                      key={m.id}
+                      className={canClick ? "row-clickable" : undefined}
+                      onClick={handleOpen}
+                      style={{ cursor: canClick ? "pointer" : undefined }}
+                    >
                       <td>
                         <div
                           className="cluster"
                           style={{ gap: "0.625rem", flexWrap: "nowrap" }}
                         >
                           <Avatar seed={seed} name={m.display_name} />
-                          <span className="font-medium truncate">
+                          <span
+                            className="font-medium truncate"
+                            style={{
+                              color: canClick
+                                ? "rgb(var(--color-primary))"
+                                : undefined,
+                            }}
+                          >
                             {m.display_name ?? (
                               <span className="text-muted">—</span>
                             )}

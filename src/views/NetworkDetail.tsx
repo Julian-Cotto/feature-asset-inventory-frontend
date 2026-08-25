@@ -2,17 +2,23 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   Cpu,
+  DoorClosed,
+  DoorOpen,
+  IdCard,
   Info,
   Laptop,
   Layers,
   MapPin,
   Network as NetworkIcon,
+  Radio,
   RefreshCw,
   Save,
   ShieldAlert,
   Wifi,
 } from "lucide-react";
 
+import EntityHistoryList from "../components/EntityHistoryList";
+import SimReconcileChip from "../components/SimReconcileChip";
 import { useToast } from "../components/ToastProvider";
 import {
   AccentPill,
@@ -22,21 +28,26 @@ import {
 import { listLocations } from "../services/inventory";
 import {
   getNetwork,
+  listAxisControllersForNetwork,
   relinkNetworkAssets,
   syncNetworks,
   updateNetwork,
 } from "../services/networks";
+import { listSimsForNetwork } from "../services/sims";
 import type { Location } from "../types/inventory";
 import type {
   NetworkAsset,
   NetworkDetail as NetworkDetailType,
   NetworkLinkReason,
 } from "../types/network";
+import type { NetworkSim } from "../types/sim";
 
 interface Props {
   networkId: number;
   onBack: () => void;
   onAssetClick: (id: number) => void;
+  onControllersClick?: () => void;
+  onSimClick?: (id: number) => void;
 }
 
 const LINK_REASON_TINT: Record<NetworkLinkReason, { bg: string; fg: string; label: string }> = {
@@ -74,10 +85,19 @@ function LinkReasonPill({ reason }: { reason: NetworkLinkReason }) {
   );
 }
 
+interface NetworkAxisCtl {
+  id: string;
+  label: string;
+  base_url: string;
+  configured: boolean;
+}
+
 export default function NetworkDetail({
   networkId,
   onBack,
   onAssetClick,
+  onControllersClick,
+  onSimClick,
 }: Props) {
   const toast = useToast();
 
@@ -85,6 +105,8 @@ export default function NetworkDetail({
   const [error, setError] = useState<string | null>(null);
   const [locations, setLocations] = useState<Location[]>([]);
   const [busy, setBusy] = useState(false);
+  const [axisControllers, setAxisControllers] = useState<NetworkAxisCtl[]>([]);
+  const [sims, setSims] = useState<NetworkSim[]>([]);
 
   // Edit draft (only fields a human controls; rest is Meraki-sourced).
   const [nameOverride, setNameOverride] = useState("");
@@ -111,6 +133,14 @@ export default function NetworkDetail({
     void listLocations(false)
       .then(setLocations)
       .catch(() => undefined);
+    // Best-effort — Axis may not be configured, in which case the
+    // backend returns [] and we hide the section.
+    void listAxisControllersForNetwork(networkId)
+      .then(setAxisControllers)
+      .catch(() => setAxisControllers([]));
+    void listSimsForNetwork(networkId)
+      .then(setSims)
+      .catch(() => setSims([]));
   }, [networkId]);
 
   const network = detail?.network;
@@ -512,6 +542,82 @@ export default function NetworkDetail({
         )}
       </section>
 
+      {/* Access controllers (Axis) — populated when a configured Axis
+          panel's IP resolves to this network's VLAN range. Hidden if
+          none match (most networks won't host an access controller). */}
+      {axisControllers.length > 0 && (
+        <section className="card stack" style={{ padding: "1.5rem" }}>
+          <SectionHeader
+            icon={<IdCard size={18} />}
+            title="Access controllers"
+            tint="teal"
+            right={
+              <span className="text-muted text-sm">
+                {axisControllers.length}{" "}
+                {axisControllers.length === 1 ? "controller" : "controllers"}
+              </span>
+            }
+          />
+          <p className="text-muted text-sm" style={{ margin: 0 }}>
+            Axis panels whose IP falls under this network's VLAN ranges.
+          </p>
+          <div
+            className="cluster"
+            style={{ gap: "0.5rem", flexWrap: "wrap" }}
+          >
+            {axisControllers.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => onControllersClick?.()}
+                disabled={!onControllersClick}
+                className="card"
+                style={{
+                  padding: "0.6rem 0.85rem",
+                  cursor: onControllersClick ? "pointer" : "default",
+                  background:
+                    c.id === "front"
+                      ? "rgb(from rgb(var(--color-info)) r g b / 0.08)"
+                      : "rgb(from rgb(var(--color-warning)) r g b / 0.08)",
+                  border:
+                    "1px solid " +
+                    (c.id === "front"
+                      ? "rgb(from rgb(var(--color-info)) r g b / 0.35)"
+                      : "rgb(from rgb(var(--color-warning)) r g b / 0.35)"),
+                  display: "flex",
+                  gap: "0.6rem",
+                  alignItems: "center",
+                  color: "rgb(var(--color-text))",
+                  textAlign: "left",
+                }}
+                title={`Open Controllers view${c.base_url ? ` · ${c.base_url}` : ""}`}
+              >
+                <span
+                  style={{
+                    color:
+                      c.id === "front"
+                        ? "rgb(var(--color-info))"
+                        : "rgb(var(--color-warning))",
+                  }}
+                >
+                  {c.id === "front" ? (
+                    <DoorOpen size={16} />
+                  ) : (
+                    <DoorClosed size={16} />
+                  )}
+                </span>
+                <span className="stack" style={{ gap: 1 }}>
+                  <span className="font-medium">{c.label}</span>
+                  <span className="text-xs text-muted font-mono">
+                    {c.base_url}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Networking equipment */}
       <section className="card stack" style={{ padding: "1.5rem" }}>
         <SectionHeader
@@ -576,6 +682,69 @@ export default function NetworkDetail({
           <AssetTable rows={clients} onAssetClick={onAssetClick} />
         )}
       </section>
+
+      {/* SIM cards assigned to this network (firewall) */}
+      {sims.length > 0 && (
+        <section className="card stack" style={{ padding: "1.5rem" }}>
+          <SectionHeader
+            icon={<Radio size={18} />}
+            title="SIM cards on this firewall"
+            tint="teal"
+            right={
+              <span className="text-muted text-sm">{sims.length} assigned</span>
+            }
+          />
+          <div className="card" style={{ padding: 0 }}>
+            <div className="scroll-x">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>ICCID</th>
+                    <th>Carrier</th>
+                    <th>Phone</th>
+                    <th>Status</th>
+                    <th>Meraki</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sims.map((s) => (
+                    <tr
+                      key={s.id}
+                      className={onSimClick ? "row-clickable" : undefined}
+                      onClick={onSimClick ? () => onSimClick(s.id) : undefined}
+                    >
+                      <td>
+                        <span className="font-mono text-xs">{s.iccid}</span>
+                      </td>
+                      <td>{s.carrier ?? "—"}</td>
+                      <td>
+                        <span className="font-mono text-xs">
+                          {s.phone_number ?? "—"}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="badge">{s.status}</span>
+                      </td>
+                      <td>
+                        <SimReconcileChip
+                          state={s.reconcile_state}
+                          title={
+                            s.meraki_seen
+                              ? `Meraki: ${s.meraki_status ?? "seen"}`
+                              : "Not seen in any Meraki firewall"
+                          }
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <EntityHistoryList entityType="network" entityId={networkId} />
     </div>
   );
 }

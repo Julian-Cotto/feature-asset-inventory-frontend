@@ -4,7 +4,14 @@ export type AssetType =
   | "thin_client"
   | "ap"
   | "switch"
-  | "gateway";
+  | "gateway"
+  // POS / store equipment — manually onboarded, no Intune/Meraki sync.
+  | "pos_aio"
+  | "pos_thin_client"
+  | "pos_tablet"
+  | "card_reader"
+  | "printer_office"
+  | "printer_receipt";
 
 export type LookupSource = "meraki" | "lenovo" | "upc" | "unknown";
 
@@ -103,6 +110,8 @@ export interface Asset {
   mac_address: string | null;
   network_id: number | null;
   network_name: string | null;
+  meraki_claim_status: string | null;
+  meraki_claim_checked_at: string | null;
   reserved_by_kind: "deployment" | "shipment" | null;
   reserved_by_id: number | null;
   reserved_by_label: string | null;
@@ -160,6 +169,17 @@ export interface DashboardStats {
   };
   onboards_30d: SeriesPoint[];
   warranty_changes_30d: SeriesPoint[];
+  badges: {
+    total: number;
+    enabled: number;
+    disabled: number;
+    unlinked: number;
+    archived: number;
+    per_controller: { id: string; label: string; count: number }[];
+    controllers_configured: number;
+    controllers_reachable: number | null;
+    controllers_last_checked_at: string | null;
+  };
 }
 
 export interface AssetHistoryEntry {

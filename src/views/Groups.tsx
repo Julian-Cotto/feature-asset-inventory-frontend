@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 
 import { useConfirm } from "../components/ConfirmProvider";
+import ExportDropdown from "../components/ExportDropdown";
 import { useToast } from "../components/ToastProvider";
+import { downloadGroupsExport } from "../services/exports";
 import {
   AccentPill,
   Avatar,
@@ -128,20 +130,34 @@ export default function Groups({ onSelect }: Props) {
     <div className="stack-lg">
       <div className="cluster" style={{ justifyContent: "space-between" }}>
         <h2 className="heading-2">Groups</h2>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={() => void doSync()}
-          disabled={syncing}
-          title="Pull all groups from Microsoft Graph"
-        >
-          <RefreshCw
-            size={14}
-            className={syncing ? "animate-spin" : ""}
-            strokeWidth={1.75}
+        <div className="cluster" style={{ gap: "0.5rem" }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => void doSync()}
+            disabled={syncing}
+            title="Pull all groups from Microsoft Graph"
+          >
+            <RefreshCw
+              size={14}
+              className={syncing ? "animate-spin" : ""}
+              strokeWidth={1.75}
+            />
+            {syncing ? "Syncing…" : "Sync from Graph"}
+          </button>
+          <ExportDropdown
+            entityName="groups"
+            onExport={(fmt) =>
+              downloadGroupsExport(
+                {
+                  q: filter || undefined,
+                  managed_only: managedOnly,
+                },
+                fmt,
+              )
+            }
           />
-          {syncing ? "Syncing…" : "Sync from Graph"}
-        </button>
+        </div>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}

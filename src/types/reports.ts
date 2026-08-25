@@ -14,8 +14,22 @@ export interface FleetSlice {
   age_buckets: LabelCount[];
 }
 
+export interface WarrantyComplianceCell {
+  warranty: "on" | "off" | "unknown";
+  compliance: "compliant" | "non_compliant" | "unmanaged";
+  count: number;
+}
+
+export interface WarrantyComplianceMatrix {
+  warranty_axis: ("on" | "off" | "unknown")[];
+  compliance_axis: ("compliant" | "non_compliant" | "unmanaged")[];
+  cells: WarrantyComplianceCell[];
+  total: number;
+}
+
 export interface FleetReport extends FleetSlice {
   network: FleetSlice;
+  warranty_x_compliance: WarrantyComplianceMatrix;
 }
 
 export interface WarrantyCalendarPoint {

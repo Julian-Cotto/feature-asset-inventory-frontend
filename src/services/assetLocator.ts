@@ -48,29 +48,44 @@ export interface LocatorResult {
   groups: LocatorGroup[];
 }
 
-function qs(tokens: string[], includeArchived: boolean): string {
+export interface LocatorQuery {
+  tokens: string[];   // model substrings
+  serials: string[];  // serial endswith
+  macs: string[];     // mac exact (any format)
+}
+
+function qs(
+  query: LocatorQuery,
+  includeArchived: boolean,
+  live: boolean,
+): string {
   const params = new URLSearchParams();
-  params.set("q", tokens.join(","));
+  if (query.tokens.length) params.set("q", query.tokens.join(","));
+  if (query.serials.length) params.set("serials", query.serials.join(","));
+  if (query.macs.length) params.set("macs", query.macs.join(","));
   if (includeArchived) params.set("include_archived", "true");
+  if (live) params.set("live", "true");
   return params.toString();
 }
 
 export const locateAssets = (
-  tokens: string[],
+  query: LocatorQuery,
   includeArchived = false,
+  live = false,
 ): Promise<LocatorResult> =>
   apiFetch<LocatorResult>(
-    `/assets/locator?${qs(tokens, includeArchived)}`,
+    `/assets/locator?${qs(query, includeArchived, live)}`,
     { method: "GET" },
   );
 
 /** Download CSV or XLSX. Triggers a browser save via a transient anchor. */
 export async function downloadLocatorExport(
-  tokens: string[],
+  query: LocatorQuery,
   fmt: "csv" | "xlsx",
   includeArchived = false,
+  live = false,
 ): Promise<void> {
-  const params = qs(tokens, includeArchived);
+  const params = qs(query, includeArchived, live);
   const path = `/assets/locator?${params}&format=${fmt}`;
   const { blob, filename } = await apiFetchBlob(path, { method: "GET" });
   const fallback = `asset-locator.${fmt}`;

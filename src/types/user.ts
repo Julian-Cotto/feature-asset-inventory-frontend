@@ -75,3 +75,13 @@ export interface AssignableDevicesResponse {
   staging_upn: string;
   devices: DeviceSummary[];
 }
+
+export interface UserSoftwareAssignment {
+  assignment_id: number;
+  software_id: number;
+  name: string;
+  category: string | null;
+  vendor: string | null;
+  source: string;
+  archived: boolean;
+}

@@ -37,6 +37,15 @@ export const archiveSoftware = (id: number) =>
 export const unarchiveSoftware = (id: number) =>
   apiPost<Software>(`/software/${id}/unarchive`);
 
+export interface SoftwareBulkResult {
+  requested: number;
+  updated: number;
+  skipped: number;
+}
+
+export const bulkArchiveSoftware = (ids: number[], archived: boolean) =>
+  apiPost<SoftwareBulkResult>("/software/bulk-archive", { ids, archived });
+
 export const syncSoftwareFromIntune = () =>
   apiPost<SoftwareSyncResult>("/software/sync");
 
@@ -50,3 +59,53 @@ export const addAssignment = (
 
 export const deleteAssignment = (softwareId: number, assignmentId: number) =>
   apiDelete<void>(`/software/${softwareId}/assignments/${assignmentId}`);
+
+export interface SoftwareUserRef {
+  id: string;
+  display_name: string | null;
+  user_principal_name: string | null;
+  department: string | null;
+  via: "direct" | "group";
+}
+
+export interface SoftwareCompanyGroup {
+  company: string;
+  count: number;
+  users: SoftwareUserRef[];
+}
+
+export interface SoftwareUsersByCompany {
+  groups: SoftwareCompanyGroup[];
+  groups_expanded: boolean;
+  group_assignment_count: number;
+}
+
+export const getSoftwareUsersByCompany = (
+  softwareId: number,
+  includeGroups = false,
+) =>
+  apiGet<SoftwareUsersByCompany>(
+    `/software/${softwareId}/users-by-company${
+      includeGroups ? "?include_groups=true" : ""
+    }`,
+  );
+
+export interface SoftwareByCompanyRow {
+  software_id: number;
+  software_name: string;
+  source: string;
+  total: number;
+  counts: Record<string, number>;
+}
+
+export interface SoftwareByCompanyMatrix {
+  source: string | null;
+  companies: string[];
+  company_totals: Record<string, number>;
+  rows: SoftwareByCompanyRow[];
+}
+
+export const getSoftwareByCompanyMatrix = (source?: string) =>
+  apiGet<SoftwareByCompanyMatrix>(
+    `/reports/software-by-company${source ? `?source=${encodeURIComponent(source)}` : ""}`,
+  );

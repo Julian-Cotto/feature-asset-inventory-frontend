@@ -23,6 +23,7 @@ import type {
   ShipmentEvent,
 } from "../types/shipment";
 import { useConfirm } from "../components/ConfirmProvider";
+import EntityHistoryList from "../components/EntityHistoryList";
 import {
   AccentPill,
   Avatar,
@@ -463,6 +464,8 @@ export default function ShipmentDetail({ shipmentId, onBack }: Props) {
           </ul>
         )}
       </div>
+
+      <EntityHistoryList entityType="shipment" entityId={shipmentId} />
     </div>
   );
 }

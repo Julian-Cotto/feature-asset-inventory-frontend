@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 
+import ExportDropdown from "../components/ExportDropdown";
 import Select from "../components/Select";
+import { StatTile, StatTileRow } from "../components/StatTile";
+import { downloadShipmentsExport } from "../services/exports";
 import { listShipments } from "../services/shipments";
 import type {
   Shipment,
@@ -55,6 +58,8 @@ function resolutionBadgeClass(r: ShipmentResolution): string {
 
 export default function Shipments({ onSelect, onCreate }: Props) {
   const [shipments, setShipments] = useState<Shipment[]>([]);
+  // All active shipments — powers the stat tiles independent of the filters.
+  const [allActive, setAllActive] = useState<Shipment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [direction, setDirection] = useState("");
   const [resolution, setResolution] = useState("");
@@ -81,14 +86,52 @@ export default function Shipments({ onSelect, onCreate }: Props) {
     void reload();
   }, [direction, resolution, showArchived]);
 
+  useEffect(() => {
+    void listShipments({ archived: false, limit: 500 })
+      .then(setAllActive)
+      .catch(() => setAllActive([]));
+  }, []);
+
+  const inTransit = (s: Shipment) =>
+    s.carrier_status === "in_transit" || s.carrier_status === "out_for_delivery";
+  const stats = {
+    total: allActive.length,
+    in_transit: allActive.filter(inTransit).length,
+    delivered: allActive.filter((s) => s.carrier_status === "delivered").length,
+    exceptions: allActive.filter((s) => s.carrier_status === "exception").length,
+  };
+
   return (
     <div className="stack-lg">
       <div className="cluster" style={{ justifyContent: "space-between" }}>
         <h2 className="heading-2">Shipments</h2>
-        <button type="button" className="btn btn-primary btn-sm" onClick={onCreate}>
-          New shipment
-        </button>
+        <div className="cluster" style={{ gap: "0.5rem" }}>
+          <ExportDropdown
+            entityName="shipments"
+            onExport={(fmt) =>
+              downloadShipmentsExport(
+                {
+                  q: q || undefined,
+                  direction: direction || undefined,
+                  resolution: resolution || undefined,
+                  archived: showArchived,
+                },
+                fmt,
+              )
+            }
+          />
+          <button type="button" className="btn btn-primary btn-sm" onClick={onCreate}>
+            New shipment
+          </button>
+        </div>
       </div>
+
+      <StatTileRow>
+        <StatTile label="Active shipments" value={stats.total} tone="neutral" />
+        <StatTile label="In transit" value={stats.in_transit} tone="warning" />
+        <StatTile label="Delivered" value={stats.delivered} tone="success" />
+        <StatTile label="Exceptions" value={stats.exceptions} tone="danger" />
+      </StatTileRow>
 
       <div className="toolbar">
         <input

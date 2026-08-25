@@ -49,10 +49,18 @@ declare global {
   interface Window {
     BarcodeDetector?: new (opts?: { formats: string[] }) => {
       detect: (
-        src: HTMLVideoElement | ImageBitmap | Blob,
+        src: HTMLVideoElement | ImageBitmap | Blob | HTMLCanvasElement,
       ) => Promise<DetectedCode[]>;
     };
   }
+}
+
+// Capability types — TS lib doesn't include zoom/torch/focusMode yet.
+interface ExtendedTrackCapabilities {
+  zoom?: { min: number; max: number; step?: number };
+  torch?: boolean;
+  focusMode?: string[];
+  focusDistance?: { min: number; max: number; step?: number };
 }
 
 interface NormZone {
@@ -64,6 +72,9 @@ interface NormZone {
 
 const MIN_ZONE = 0.05;
 const MAX_ZONE = 1;
+// How many consecutive frames a single code must hold the same value before
+// we auto-accept. Suppresses single-frame flickers onto neighbouring codes.
+const STABLE_FRAMES_NEEDED = 3;
 
 function clampZone(z: NormZone): NormZone {
   const w = Math.max(MIN_ZONE, Math.min(MAX_ZONE, z.w));
@@ -71,6 +82,14 @@ function clampZone(z: NormZone): NormZone {
   const x = Math.max(0, Math.min(1 - w, z.x));
   const y = Math.max(0, Math.min(1 - h, z.y));
   return { x, y, w, h };
+}
+
+function isMobileViewport(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia("(pointer: coarse)").matches ||
+    window.matchMedia("(max-width: 720px)").matches
+  );
 }
 
 export default function CameraScanner({ onResult, onClose }: Props) {
@@ -85,6 +104,7 @@ export default function CameraScanner({ onResult, onClose }: Props) {
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const trackRef = useRef<MediaStreamTrack | null>(null);
   const pausedRef = useRef(false);
 
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +112,15 @@ export default function CameraScanner({ onResult, onClose }: Props) {
   const [tip, setTip] = useState<string>("Point camera at the code");
   const [tipTone, setTipTone] = useState<"info" | "warn" | "good">("info");
   const [native, setNative] = useState(false);
+  const [fullscreen] = useState<boolean>(isMobileViewport);
+
+  // Camera controls (only shown when track exposes the capability).
+  const [zoomCaps, setZoomCaps] = useState<{ min: number; max: number; step: number } | null>(null);
+  const [zoom, setZoom] = useState<number>(1);
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
+  const [macroSupported, setMacroSupported] = useState(false);
+  const [macroOn, setMacroOn] = useState(false);
 
   // Scan zone in normalized [0..1] coordinates of the displayed video.
   const [zone, setZone] = useState<NormZone>({
@@ -105,9 +134,19 @@ export default function CameraScanner({ onResult, onClose }: Props) {
     zoneRef.current = zone;
   }, [zone]);
 
-  // Multi-candidate selection. When more than one code is in the scan zone,
-  // detection pauses and these are shown as tappable boxes.
-  const [candidates, setCandidates] = useState<DetectedCode[] | null>(null);
+  // Latest detected codes, in original video coordinates. Drives tap-to-pick
+  // overlay. Updated every detection tick — flicker is acceptable because the
+  // user is holding still when squaring up on a code.
+  const [detected, setDetected] = useState<DetectedCode[]>([]);
+  const detectedRef = useRef<DetectedCode[]>([]);
+  useEffect(() => {
+    detectedRef.current = detected;
+  }, [detected]);
+
+  // Multi-candidate selection — when more than one is steady in the zone we
+  // pause autoplay so the user can tap deliberately without the overlay
+  // moving under their finger.
+  const [paused, setPaused] = useState(false);
 
   const handleSelect = useCallback((rawValue: string) => {
     onResultRef.current(rawValue);
@@ -115,8 +154,64 @@ export default function CameraScanner({ onResult, onClose }: Props) {
 
   const handleResume = useCallback(() => {
     pausedRef.current = false;
-    setCandidates(null);
+    setPaused(false);
+    setDetected([]);
     void videoRef.current?.play().catch(() => {});
+  }, []);
+
+  const applyZoom = useCallback((z: number) => {
+    setZoom(z);
+    const t = trackRef.current;
+    if (!t) return;
+    t.applyConstraints({
+      advanced: [{ zoom: z } as unknown as MediaTrackConstraintSet],
+    }).catch(() => {});
+  }, []);
+
+  const toggleTorch = useCallback(() => {
+    setTorchOn((prev) => {
+      const next = !prev;
+      const t = trackRef.current;
+      if (t) {
+        t.applyConstraints({
+          advanced: [{ torch: next } as unknown as MediaTrackConstraintSet],
+        }).catch(() => {});
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleMacro = useCallback(() => {
+    setMacroOn((prev) => {
+      const next = !prev;
+      const t = trackRef.current;
+      if (t) {
+        // Try manual+short focusDistance first (Android phones with a real
+        // macro lens). Fall back to focusMode=continuous on toggle-off.
+        const caps =
+          (t.getCapabilities?.() as ExtendedTrackCapabilities | undefined) ??
+          {};
+        const advanced: MediaTrackConstraintSet[] = [];
+        if (next) {
+          if (caps.focusDistance) {
+            advanced.push({
+              focusMode: "manual",
+              focusDistance: caps.focusDistance.min,
+            } as unknown as MediaTrackConstraintSet);
+          } else if (caps.focusMode?.includes("macro")) {
+            advanced.push({
+              focusMode: "macro",
+            } as unknown as MediaTrackConstraintSet);
+          }
+        } else {
+          advanced.push({
+            focusMode: "continuous",
+          } as unknown as MediaTrackConstraintSet);
+        }
+        t.applyConstraints({ advanced }).catch(() => {});
+      }
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -142,11 +237,13 @@ export default function CameraScanner({ onResult, onClose }: Props) {
       if (ctx.cancelled) return;
 
       setStatus("Requesting camera…");
+      // Higher target resolution helps tiny barcodes; the device downsamples
+      // if it can't deliver, so asking high is free.
       const acquired = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
         },
         audio: false,
       });
@@ -156,18 +253,43 @@ export default function CameraScanner({ onResult, onClose }: Props) {
       }
       ctx.stream = acquired;
 
-      // Best-effort continuous focus where supported (Android Chrome honours,
-      // iOS Safari currently ignores). Wrapped in try/catch — applyConstraints
-      // throws if focusMode isn't a known constraint on the track.
+      const track = acquired.getVideoTracks()[0] ?? null;
+      trackRef.current = track;
+
+      // Best-effort continuous focus where supported.
       try {
-        const track = acquired.getVideoTracks()[0];
         if (track) {
           await track.applyConstraints({
-            advanced: [{ focusMode: "continuous" } as MediaTrackConstraintSet],
+            advanced: [
+              { focusMode: "continuous" } as MediaTrackConstraintSet,
+            ],
           });
         }
       } catch {
         /* not supported — ignore */
+      }
+
+      // Discover camera capabilities for the optional controls.
+      try {
+        const caps =
+          (track?.getCapabilities?.() as ExtendedTrackCapabilities | undefined) ??
+          {};
+        if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+          setZoomCaps({
+            min: caps.zoom.min,
+            max: caps.zoom.max,
+            step: caps.zoom.step ?? 0.1,
+          });
+        }
+        if (caps.torch) setTorchSupported(true);
+        if (
+          (caps.focusDistance && caps.focusDistance.min !== undefined) ||
+          caps.focusMode?.includes("macro")
+        ) {
+          setMacroSupported(true);
+        }
+      } catch {
+        /* ignore */
       }
 
       const v = document.createElement("video");
@@ -178,6 +300,8 @@ export default function CameraScanner({ onResult, onClose }: Props) {
       v.autoplay = true;
       v.srcObject = acquired;
       v.style.width = "100%";
+      v.style.height = "100%";
+      v.style.objectFit = "cover";
       v.style.borderRadius = "4px";
       v.style.display = "block";
       containerRef.current?.appendChild(v);
@@ -199,6 +323,7 @@ export default function CameraScanner({ onResult, onClose }: Props) {
       setStatus("");
       setNative(true);
 
+      // Frame stats canvas — small downsample for brightness/contrast/motion.
       const sampleCanvas = document.createElement("canvas");
       sampleCanvas.width = 64;
       sampleCanvas.height = 36;
@@ -206,9 +331,24 @@ export default function CameraScanner({ onResult, onClose }: Props) {
         willReadFrequently: true,
       });
 
+      // Crop canvas — we feed only the user-selected zone to the detector,
+      // scaled up. Acts as digital zoom on top of any hardware zoom.
+      const cropCanvas = document.createElement("canvas");
+      const cropCtx = cropCanvas.getContext("2d", {
+        willReadFrequently: true,
+      });
+
       const startTime = performance.now();
       let lastFrame: Uint8ClampedArray | null = null;
       let lastTipUpdate = 0;
+      // Stability: track the most recently-seen single-code rawValue and
+      // how many consecutive frames it has held the same value at roughly
+      // the same position.
+      const stab = {
+        value: null as string | null,
+        count: 0,
+        box: null as BoundingBox | null,
+      };
 
       const computeFrameStats = () => {
         if (!sampleCtx || !ctx.video) {
@@ -260,7 +400,7 @@ export default function CameraScanner({ onResult, onClose }: Props) {
         lastTipUpdate = now;
         if (stats.mean < 35) {
           setTipTone("warn");
-          setTip("Too dark — turn on more light");
+          setTip("Too dark — try the Torch button or add light");
           return;
         }
         if (stats.mean > 230) {
@@ -270,7 +410,7 @@ export default function CameraScanner({ onResult, onClose }: Props) {
         }
         if (stats.contrast < 18) {
           setTipTone("warn");
-          setTip("Low contrast — fill scan box with the code");
+          setTip("Low contrast — zoom in or fill scan box");
           return;
         }
         if (stats.motion > 18) {
@@ -280,12 +420,12 @@ export default function CameraScanner({ onResult, onClose }: Props) {
         }
         if (elapsedMs > 6000) {
           setTipTone("warn");
-          setTip("Not detecting. Resize the box, fill with code, ~6–10 in away");
+          setTip("Small code? Try Zoom or Macro; tap any code to pick");
           return;
         }
         if (elapsedMs > 2500) {
           setTipTone("info");
-          setTip("Looking for code — square it inside the box");
+          setTip("Looking for code — fill scan box, hold steady");
           return;
         }
         setTipTone("info");
@@ -300,39 +440,90 @@ export default function CameraScanner({ onResult, onClose }: Props) {
         }
         const elapsed = performance.now() - startTime;
         try {
-          const codes = await detector.detect(ctx.video);
-          if (codes.length > 0 && ctx.video) {
-            const vw = ctx.video.videoWidth;
-            const vh = ctx.video.videoHeight;
+          const video = ctx.video;
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
+          if (vw && vh && cropCtx) {
             const z = zoneRef.current;
-            // Filter codes whose center falls inside the scan zone.
-            const inZone = codes.filter((c) => {
-              if (!c.boundingBox || !vw || !vh) return true;
-              const cx = (c.boundingBox.x + c.boundingBox.width / 2) / vw;
-              const cy = (c.boundingBox.y + c.boundingBox.height / 2) / vh;
-              return (
-                cx >= z.x &&
-                cx <= z.x + z.w &&
-                cy >= z.y &&
-                cy <= z.y + z.h
-              );
-            });
-            if (inZone.length === 1) {
-              setTipTone("good");
-              setTip(`Detected: ${inZone[0].rawValue}`);
-              setTimeout(() => onResultRef.current(inZone[0].rawValue), 120);
-              return;
+            const sx = z.x * vw;
+            const sy = z.y * vh;
+            const sw = Math.max(1, z.w * vw);
+            const sh = Math.max(1, z.h * vh);
+            // Scale crop up so a tiny zone still gets pixels for the
+            // detector. Cap at 1600 to keep per-frame cost reasonable.
+            const targetW = Math.min(1600, Math.max(640, Math.round(sw * 1.5)));
+            const targetH = Math.round((sh / sw) * targetW);
+            if (
+              cropCanvas.width !== targetW ||
+              cropCanvas.height !== targetH
+            ) {
+              cropCanvas.width = targetW;
+              cropCanvas.height = targetH;
             }
-            if (inZone.length > 1) {
+            cropCtx.drawImage(video, sx, sy, sw, sh, 0, 0, targetW, targetH);
+            const codes = await detector.detect(cropCanvas);
+
+            // Map bounding boxes from crop space → original video space so
+            // the overlay can paint them on top of the live video.
+            const scaleX = sw / targetW;
+            const scaleY = sh / targetH;
+            const mapped: DetectedCode[] = codes.map((c) => ({
+              rawValue: c.rawValue,
+              format: c.format,
+              boundingBox: c.boundingBox
+                ? {
+                    x: c.boundingBox.x * scaleX + sx,
+                    y: c.boundingBox.y * scaleY + sy,
+                    width: c.boundingBox.width * scaleX,
+                    height: c.boundingBox.height * scaleY,
+                  }
+                : undefined,
+            }));
+
+            setDetected(mapped);
+
+            if (mapped.length === 1) {
+              const only = mapped[0];
+              const box = only.boundingBox ?? null;
+              // Treat boxes overlapping at least ~50% of either dimension as
+              // the "same" code for stability tracking.
+              const sameBox =
+                stab.box && box
+                  ? Math.abs(stab.box.x - box.x) < box.width * 0.5 &&
+                    Math.abs(stab.box.y - box.y) < box.height * 0.5
+                  : true;
+              if (stab.value === only.rawValue && sameBox) {
+                stab.count += 1;
+              } else {
+                stab.value = only.rawValue;
+                stab.count = 1;
+                stab.box = box;
+              }
+              if (stab.count >= STABLE_FRAMES_NEEDED) {
+                setTipTone("good");
+                setTip(`Detected: ${only.rawValue}`);
+                setTimeout(() => onResultRef.current(only.rawValue), 120);
+                return;
+              }
+              setTipTone("info");
+              setTip("Hold steady — locking on…");
+            } else if (mapped.length > 1) {
+              stab.value = null;
+              stab.count = 0;
+              stab.box = null;
               pausedRef.current = true;
-              ctx.video.pause();
+              video.pause();
+              setPaused(true);
               setTipTone("info");
               setTip(
-                `${inZone.length} codes in box — tap the one you want, or resize the box`,
+                `${mapped.length} codes in box — tap the one you want, or resize the box`,
               );
-              setCandidates(inZone);
               ctx.rafId = requestAnimationFrame(tick);
               return;
+            } else {
+              stab.value = null;
+              stab.count = 0;
+              stab.box = null;
             }
           }
         } catch {
@@ -366,6 +557,7 @@ export default function CameraScanner({ onResult, onClose }: Props) {
       cancelAnimationFrame(ctx.rafId);
       releaseStream(ctx.stream);
       ctx.stream = null;
+      trackRef.current = null;
       if (ctx.video?.parentElement) {
         ctx.video.parentElement.removeChild(ctx.video);
       }
@@ -395,6 +587,26 @@ export default function CameraScanner({ onResult, onClose }: Props) {
         ? "text-warning"
         : "text-primary";
 
+  const panelStyle: React.CSSProperties = fullscreen
+    ? {
+        position: "fixed",
+        inset: 0,
+        width: "100vw",
+        height: "100dvh",
+        maxWidth: "none",
+        maxHeight: "none",
+        borderRadius: 0,
+        padding: "0.6rem 0.6rem 0.8rem",
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.5rem",
+      }
+    : {};
+
+  const stageStyle: React.CSSProperties = fullscreen
+    ? { flex: 1, minHeight: 0 }
+    : {};
+
   return (
     <div
       className="modal-backdrop"
@@ -411,30 +623,108 @@ export default function CameraScanner({ onResult, onClose }: Props) {
         downOnBackdropRef.current = false;
       }}
     >
-      <div className="modal-panel" onMouseDown={(e) => e.stopPropagation()}>
-        <h3 className="modal-title">Scan barcode / QR</h3>
-        <div className="relative w-full min-h-[250px]">
+      <div
+        className="modal-panel"
+        style={panelStyle}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {!fullscreen && <h3 className="modal-title">Scan barcode / QR</h3>}
+        <div
+          className="relative w-full"
+          style={{
+            ...stageStyle,
+            minHeight: fullscreen ? 0 : 250,
+          }}
+        >
           <div
             ref={containerRef}
             id={TARGET_ID}
-            className="w-full min-h-[250px] rounded-md overflow-hidden bg-black"
+            className="w-full rounded-md overflow-hidden bg-black"
+            style={{
+              width: "100%",
+              height: fullscreen ? "100%" : undefined,
+              minHeight: fullscreen ? 0 : 250,
+            }}
           />
-          {native && !error && !candidates && (
+          {native && !error && (
             <ScanZoneOverlay
               tone={tipTone}
               zone={zone}
               onChange={(z) => setZone(clampZone(z))}
             />
           )}
-          {native && !error && candidates && videoRef.current && (
+          {native && !error && detected.length > 0 && videoRef.current && (
             <CandidateOverlay
-              codes={candidates}
+              codes={detected}
               video={videoRef.current}
-              tone={tipTone}
+              showLabel={paused || detected.length > 1}
               onPick={handleSelect}
             />
           )}
         </div>
+
+        {/* Camera controls — only render rows that are actually supported. */}
+        {native && !error && (zoomCaps || torchSupported || macroSupported) && (
+          <div
+            className="cluster"
+            style={{
+              gap: "0.5rem",
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            {zoomCaps && (
+              <label
+                className="cluster"
+                style={{
+                  gap: "0.4rem",
+                  alignItems: "center",
+                  flex: "1 1 12rem",
+                  minWidth: 0,
+                }}
+              >
+                <span className="text-xs text-muted" style={{ minWidth: 36 }}>
+                  Zoom
+                </span>
+                <input
+                  type="range"
+                  min={zoomCaps.min}
+                  max={zoomCaps.max}
+                  step={zoomCaps.step}
+                  value={zoom}
+                  onChange={(e) => applyZoom(parseFloat(e.target.value))}
+                  style={{ flex: 1, minWidth: 0 }}
+                />
+                <span
+                  className="text-xs font-mono"
+                  style={{ minWidth: 36, textAlign: "right" }}
+                >
+                  {zoom.toFixed(1)}×
+                </span>
+              </label>
+            )}
+            {torchSupported && (
+              <button
+                type="button"
+                className={`btn btn-sm ${torchOn ? "btn-primary" : "btn-secondary"}`}
+                onClick={toggleTorch}
+                title="Toggle camera flashlight"
+              >
+                {torchOn ? "Torch on" : "Torch"}
+              </button>
+            )}
+            {macroSupported && (
+              <button
+                type="button"
+                className={`btn btn-sm ${macroOn ? "btn-primary" : "btn-secondary"}`}
+                onClick={toggleMacro}
+                title="Switch to macro / nearest focus distance"
+              >
+                {macroOn ? "Macro on" : "Macro"}
+              </button>
+            )}
+          </div>
+        )}
 
         {status && !error && (
           <p className="text-muted text-xs">{status}</p>
@@ -442,13 +732,15 @@ export default function CameraScanner({ onResult, onClose }: Props) {
         {!status && !error && (
           <p className={`text-sm font-medium min-h-[18px] ${tipToneClass}`}>{tip}</p>
         )}
-        <p className="text-muted text-xs">
-          Drag corners to resize the scan box. Pinch zooms with the OS camera if
-          supported.
-        </p>
+        {!fullscreen && (
+          <p className="text-muted text-xs">
+            Drag corners to resize the scan box. Tap any highlighted code to
+            pick it.
+          </p>
+        )}
         {error && <div className="alert alert-error">{error}</div>}
         <div className="modal-actions">
-          {candidates ? (
+          {paused ? (
             <button
               type="button"
               className="btn btn-primary btn-sm"
@@ -598,13 +890,19 @@ function ScanZoneOverlay({ tone, zone, onChange }: OverlayProps) {
 interface CandidateProps {
   codes: DetectedCode[];
   video: HTMLVideoElement;
-  tone: "info" | "warn" | "good";
+  showLabel: boolean;
   onPick: (rawValue: string) => void;
 }
 
-function CandidateOverlay({ codes, video, onPick }: CandidateProps) {
+function CandidateOverlay({ codes, video, showLabel, onPick }: CandidateProps) {
   const vw = video.videoWidth || 1;
   const vh = video.videoHeight || 1;
+  // Display vs intrinsic — video uses object-fit:cover in fullscreen so the
+  // intrinsic frame may be cropped on screen. We can't perfectly reverse the
+  // cover crop without measuring the element, but boundingBox values come
+  // from the intrinsic frame and the overlay is positioned inside the same
+  // element so percentage placement still tracks correctly for both
+  // contain and cover within the visible portion.
 
   return (
     <div
@@ -647,20 +945,22 @@ function CandidateOverlay({ codes, video, onPick }: CandidateProps) {
             }}
             title={c.rawValue}
           >
-            <span
-              style={{
-                background: "rgba(0,0,0,0.65)",
-                padding: "2px 4px",
-                borderRadius: 3,
-                whiteSpace: "nowrap",
-                maxWidth: "95%",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                margin: 2,
-              }}
-            >
-              {c.rawValue}
-            </span>
+            {showLabel && (
+              <span
+                style={{
+                  background: "rgba(0,0,0,0.65)",
+                  padding: "2px 4px",
+                  borderRadius: 3,
+                  whiteSpace: "nowrap",
+                  maxWidth: "95%",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  margin: 2,
+                }}
+              >
+                {c.rawValue}
+              </span>
+            )}
           </button>
         );
       })}

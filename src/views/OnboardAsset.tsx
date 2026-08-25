@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  ArrowRight,
   CheckCircle2,
   Cpu,
   Layers,
@@ -10,8 +11,10 @@ import {
 } from "lucide-react";
 
 import BulkOnboardModal from "../components/BulkOnboardModal";
+import MerakiClaimPanel from "../components/MerakiClaimPanel";
 import ScanInput from "../components/ScanInput";
 import Select from "../components/Select";
+import { useToast } from "../components/ToastProvider";
 import { AccentPill, SectionHeader } from "../components/visual";
 import {
   listLocations,
@@ -40,6 +43,12 @@ const TYPE_OPTIONS: { value: AssetType; label: string }[] = [
   { value: "ap", label: "Access point" },
   { value: "switch", label: "Switch" },
   { value: "gateway", label: "Gateway" },
+  { value: "pos_aio", label: "POS station (Windows AIO)" },
+  { value: "pos_thin_client", label: "POS station (thin client)" },
+  { value: "pos_tablet", label: "POS tablet" },
+  { value: "card_reader", label: "Credit card reader" },
+  { value: "printer_office", label: "Office printer" },
+  { value: "printer_receipt", label: "Receipt printer" },
 ];
 
 const NETWORK_TYPES: AssetType[] = ["ap", "switch", "gateway"];
@@ -56,8 +65,21 @@ const OS_OPTIONS = [
   "Mac",
 ] as const;
 
+interface RecentOnboard {
+  id: number;
+  serial: string;
+  assetTag: string | null;
+  assetType: AssetType;
+  model: string | null;
+}
+
 export default function OnboardAsset({ onCreated }: Props) {
+  const toast = useToast();
   const [bulkOpen, setBulkOpen] = useState(false);
+  // Batch intake: stay on the form after each save, keep placement context.
+  const [addAnother, setAddAnother] = useState(true);
+  const [recent, setRecent] = useState<RecentOnboard[]>([]);
+  const [refocusToken, setRefocusToken] = useState(0);
   const [serial, setSerial] = useState("");
   const [assetTag, setAssetTag] = useState("");
   const [assetType, setAssetType] = useState<AssetType>("laptop");
@@ -78,6 +100,10 @@ export default function OnboardAsset({ onCreated }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [lookup, setLookup] = useState<LookupResult | null>(null);
   const [lookingUp, setLookingUp] = useState(false);
+  // True once the user manually picks a Type. While false, vendor lookup
+  // (Intune/Meraki — authoritative) may set the type; a manual pick locks it.
+  // Reset each batch so the next scan auto-detects even after switching kinds.
+  const typeTouched = useRef(false);
 
   useEffect(() => {
     Promise.all([listStatuses(), listLocations()])
@@ -122,17 +148,37 @@ export default function OnboardAsset({ onCreated }: Props) {
       if (normalizedOs) setOs((curr) => curr || normalizedOs);
       if (result.osVersion)
         setOsVersion((curr) => curr || result.osVersion!);
-      // assetType defaults to "laptop". Only adopt the vendor's value if
-      // the user hasn't manually picked something else during the wait.
-      if (result.assetType)
-        setAssetType((curr) =>
-          curr === "laptop" ? result.assetType! : curr,
-        );
+      // Adopt the vendor's type unless the user has manually locked it.
+      if (result.assetType && !typeTouched.current)
+        setAssetType(result.assetType);
     } catch {
       /* lookup failed — silent */
     } finally {
       setLookingUp(false);
     }
+  }
+
+  /** Clear identity + hardware for the next scan while KEEPING placement
+   *  context (type / status / location) — the fields that stay constant
+   *  across a batch going to one place. */
+  function resetForNext() {
+    setSerial("");
+    setAssetTag("");
+    setManufacturer("");
+    setModel("");
+    setSeries("");
+    setGeneration("");
+    setCpu("");
+    setOs("");
+    setOsVersion("");
+    setNotes("");
+    setLookup(null);
+    setDuplicate(null);
+    // Let the next scan's vendor lookup auto-detect the type again. The
+    // current type value is retained (homogeneous batch), but an inherited
+    // value is no longer "locked" against a confident vendor match.
+    typeTouched.current = false;
+    setRefocusToken((t) => t + 1);
   }
 
   async function submit() {
@@ -155,7 +201,28 @@ export default function OnboardAsset({ onCreated }: Props) {
         notes: notes || null,
         intune_id: lookup?.intuneId ?? null,
       });
-      onCreated(created.id);
+
+      if (addAnother) {
+        // Stay on the form for the next device.
+        setRecent((r) => [
+          {
+            id: created.id,
+            serial: serial.trim(),
+            assetTag: assetTag.trim() || null,
+            assetType,
+            model: model || null,
+          },
+          ...r,
+        ]);
+        toast.notify({
+          kind: "success",
+          title: `Onboarded ${serial.trim()}`,
+          detail: "Ready for the next scan.",
+        });
+        resetForNext();
+      } else {
+        onCreated(created.id);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to onboard");
     } finally {
@@ -163,12 +230,30 @@ export default function OnboardAsset({ onCreated }: Props) {
     }
   }
 
+  const canSubmit = !submitting && !!serial.trim() && duplicate === null;
+
   const isComputer = !isNetworkType(assetType);
 
   return (
-    <div className="stack-lg sticky-actions-spacer">
+    <div
+      className="stack-lg sticky-actions-spacer"
+      onKeyDown={(e) => {
+        // Ctrl/⌘+Enter submits from anywhere in the form.
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && canSubmit) {
+          e.preventDefault();
+          void submit();
+        }
+      }}
+    >
       <div className="cluster" style={{ justifyContent: "space-between" }}>
-        <h2 className="heading-2">Onboard asset</h2>
+        <div className="cluster" style={{ gap: "0.625rem", alignItems: "baseline" }}>
+          <h2 className="heading-2">Onboard asset</h2>
+          {recent.length > 0 && (
+            <span className="badge badge-success">
+              {recent.length} onboarded this session
+            </span>
+          )}
+        </div>
         <button
           type="button"
           className="btn btn-secondary btn-sm"
@@ -191,10 +276,21 @@ export default function OnboardAsset({ onCreated }: Props) {
           onChange={setSerial}
           onScan={handleScan}
           label="Serial number (scan or type)"
+          refocusToken={refocusToken}
         />
         {duplicate !== null && (
-          <div className="alert alert-warning">
-            Serial already exists as asset #{duplicate}.
+          <div
+            className="alert alert-warning cluster"
+            style={{ justifyContent: "space-between", alignItems: "center" }}
+          >
+            <span>Serial already exists as asset #{duplicate}.</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => onCreated(duplicate)}
+            >
+              Open asset #{duplicate} <ArrowRight size={14} />
+            </button>
           </div>
         )}
         {lookingUp && (
@@ -258,6 +354,7 @@ export default function OnboardAsset({ onCreated }: Props) {
               value={assetType}
               onChange={(v) => {
                 const next = v as AssetType;
+                typeTouched.current = true;
                 setAssetType(next);
                 if (isNetworkType(next)) {
                   setOs("");
@@ -274,6 +371,23 @@ export default function OnboardAsset({ onCreated }: Props) {
             />
           </Field>
         </div>
+        {isNetworkType(assetType) && serial.trim() && (
+          <div
+            className="stack"
+            style={{
+              gap: "0.4rem",
+              padding: "0.75rem 0.9rem",
+              borderRadius: 8,
+              background: "rgb(var(--color-bg) / 0.4)",
+              border: "1px dashed rgb(var(--color-border) / 0.5)",
+            }}
+          >
+            <span className="text-xs text-muted">
+              Meraki org claim (idempotent — safe if already claimed):
+            </span>
+            <MerakiClaimPanel serial={serial} compact />
+          </div>
+        )}
       </div>
 
       {isComputer && (
@@ -403,16 +517,68 @@ export default function OnboardAsset({ onCreated }: Props) {
 
       {error && <div className="alert alert-error">{error}</div>}
 
+      {/* Recently onboarded this session — reassurance + quick jump. */}
+      {recent.length > 0 && (
+        <div className="card card-body stack">
+          <SectionHeader
+            icon={<CheckCircle2 size={16} />}
+            title="Onboarded this session"
+            tint="green"
+          />
+          <div className="scroll-x">
+            <table className="table">
+              <tbody>
+                {recent.map((r) => (
+                  <tr
+                    key={r.id}
+                    className="row-clickable"
+                    onClick={() => onCreated(r.id)}
+                  >
+                    <td className="font-mono text-xs">{r.serial}</td>
+                    <td>{r.assetTag ?? "—"}</td>
+                    <td>
+                      <AccentPill value={r.assetType} />
+                    </td>
+                    <td className="text-muted">{r.model ?? "—"}</td>
+                    <td style={{ textAlign: "right" }}>
+                      <span className="text-info-soft-fg cluster" style={{ gap: 4, justifyContent: "flex-end" }}>
+                        Open <ArrowRight size={13} />
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Sticky submit on mobile, inline on sm+ */}
-      <div className="sticky-actions">
+      <div className="sticky-actions cluster" style={{ gap: "1rem", alignItems: "center" }}>
         <button
           type="button"
           className="btn btn-primary w-full sm:w-auto"
           onClick={() => void submit()}
-          disabled={submitting || !serial.trim() || duplicate !== null}
+          disabled={!canSubmit}
+          title="Ctrl/⌘+Enter"
         >
-          {submitting ? "Saving…" : "Onboard asset"}
+          {submitting
+            ? "Saving…"
+            : addAnother
+              ? "Onboard & add another"
+              : "Onboard asset"}
         </button>
+        <label className="cluster" style={{ gap: "0.4rem", whiteSpace: "nowrap" }}>
+          <input
+            type="checkbox"
+            className="checkbox"
+            checked={addAnother}
+            onChange={(e) => setAddAnother(e.target.checked)}
+          />
+          <span className="text-sm text-muted">
+            Keep adding (retains type, status &amp; location)
+          </span>
+        </label>
       </div>
 
       {bulkOpen && (

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import {
+  bulkMerakiClaim,
   bulkSyncFromIntune,
   bulkSyncFromMeraki,
   countAssets,
@@ -18,9 +19,11 @@ import type { Asset, AssetStatus, Location } from "../types/inventory";
 import AssetLocatorPanel from "./AssetLocatorPanel";
 import BulkLocationModal from "../components/BulkLocationModal";
 import EditAssetModal from "../components/EditAssetModal";
+import ExportDropdown from "../components/ExportDropdown";
 import Select from "../components/Select";
 import { useConfirm } from "../components/ConfirmProvider";
 import { useToast } from "../components/ToastProvider";
+import { downloadAssetsExport } from "../services/exports";
 import { assetTypeBadgeClass, assetTypeLabel } from "../utils/assetTypeBadge";
 import { friendlyModel } from "../utils/friendlyModel";
 import { osDisplay } from "../utils/osDisplay";
@@ -73,6 +76,50 @@ export default function AssetsList({
   const [editing, setEditing] = useState<Asset | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkLocationOpen, setBulkLocationOpen] = useState(false);
+  const [bulkClaimBusy, setBulkClaimBusy] = useState(false);
+
+  async function runBulkClaim(ids: number[]) {
+    if (ids.length === 0) return;
+    const ok = await confirm({
+      title: "Claim selected gear in Meraki?",
+      tone: "info",
+      confirmLabel: "Claim",
+      cancelLabel: "Cancel",
+      message: (
+        <p>
+          This will run a Meraki org-claim for{" "}
+          <strong>{ids.length}</strong> selected serial
+          {ids.length === 1 ? "" : "s"}. Already-claimed serials report
+          as a no-op.
+        </p>
+      ),
+    });
+    if (!ok) return;
+    setBulkClaimBusy(true);
+    try {
+      const r = await bulkMerakiClaim(ids);
+      toast.notify({
+        kind:
+          r.failed === 0
+            ? "success"
+            : r.succeeded > 0
+              ? "warning"
+              : "danger",
+        title: `Bulk Meraki claim · ${r.succeeded}/${r.requested}`,
+        detail: `${r.succeeded} ok · ${r.failed} failed · ${r.skipped} skipped`,
+      });
+      // Refresh visible rows so the persisted claim_status appears.
+      await reload();
+    } catch (e) {
+      toast.notify({
+        kind: "danger",
+        title: "Bulk claim failed",
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setBulkClaimBusy(false);
+    }
+  }
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
@@ -453,6 +500,26 @@ export default function AssetsList({
         >
           Search
         </button>
+        <ExportDropdown
+          entityName="assets"
+          onExport={(fmt) =>
+            downloadAssetsExport(
+              {
+                q: q || undefined,
+                status_code: statusCode || undefined,
+                asset_type: assetType || undefined,
+                location_id: locationId ? Number(locationId) : undefined,
+                manufacturer: manufacturer || undefined,
+                os: osFilter || undefined,
+                assignment_state: assignmentState || undefined,
+                warranty_state: warrantyState || undefined,
+                defender_health: defenderHealth || undefined,
+                include_archived: includeArchived,
+              },
+              fmt,
+            )
+          }
+        />
       </div>
 
       {showMoreFilters && (
@@ -639,33 +706,59 @@ export default function AssetsList({
         )}
       </ul>
 
-      {selectedIds.size > 0 && (
-        <div
-          className="alert alert-info cluster"
-          style={{ justifyContent: "space-between" }}
-        >
-          <span>
-            <strong>{selectedIds.size}</strong> asset
-            {selectedIds.size === 1 ? "" : "s"} selected
-          </span>
-          <div className="cluster">
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setBulkLocationOpen(true)}
+      {selectedIds.size > 0 &&
+        (() => {
+          const gearTypes = new Set(["gateway", "switch", "ap"]);
+          const gearSelected = assets.filter(
+            (a) => selectedIds.has(a.id) && gearTypes.has(a.asset_type),
+          );
+          return (
+            <div
+              className="alert alert-info cluster"
+              style={{ justifyContent: "space-between" }}
             >
-              Set location
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => setSelectedIds(new Set())}
-            >
-              Clear selection
-            </button>
-          </div>
-        </div>
-      )}
+              <span>
+                <strong>{selectedIds.size}</strong> asset
+                {selectedIds.size === 1 ? "" : "s"} selected
+                {gearSelected.length > 0 && (
+                  <span className="text-muted text-xs">
+                    {" "}
+                    · {gearSelected.length} Meraki-claimable
+                  </span>
+                )}
+              </span>
+              <div className="cluster">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setBulkLocationOpen(true)}
+                >
+                  Set location
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={gearSelected.length === 0 || bulkClaimBusy}
+                  onClick={() => void runBulkClaim(gearSelected.map((a) => a.id))}
+                  title={
+                    gearSelected.length === 0
+                      ? "Select at least one gateway / switch / AP"
+                      : `Claim ${gearSelected.length} serial(s) into Meraki org`
+                  }
+                >
+                  {bulkClaimBusy ? "Claiming…" : "Claim in Meraki"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setSelectedIds(new Set())}
+                >
+                  Clear selection
+                </button>
+              </div>
+            </div>
+          );
+        })()}
 
       {/* Table — tablet+ (sm and up) */}
       <div className="card hidden sm:block">

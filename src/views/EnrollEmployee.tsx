@@ -41,6 +41,10 @@ import {
   unassignDevice,
 } from "../services/users";
 import { addAssignment, listSoftware } from "../services/software";
+import Select from "../components/Select";
+import { assignAsset, listAssets, listLocations } from "../services/inventory";
+import { locationLabel } from "../utils/locationLabel";
+import type { Asset, Location } from "../types/inventory";
 import type { Software } from "../types/software";
 import type {
   AssignableDevicesResponse,
@@ -93,6 +97,14 @@ export default function EnrollEmployee({
   const [busySoftware, setBusySoftware] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
+  // Location-scoped free-device assignment (warehouse/site assets, assigned
+  // via inventory `assigned_upn` rather than the Intune staging pool).
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [locationId, setLocationId] = useState<string>("");
+  const [locationAssets, setLocationAssets] = useState<Asset[]>([]);
+  const [loadingLocAssets, setLoadingLocAssets] = useState(false);
+  const [busyLocAsset, setBusyLocAsset] = useState<number | null>(null);
+
   const initialApplied = useRef(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -106,7 +118,22 @@ export default function EnrollEmployee({
     void listSoftware({ include_archived: false })
       .then(setAllSoftware)
       .catch(() => undefined);
+    void listLocations().then(setLocations).catch(() => setLocations([]));
   }, []);
+
+  // Free (available) assets at the chosen location — refreshed via a token.
+  const [locAssetToken, setLocAssetToken] = useState(0);
+  useEffect(() => {
+    if (!locationId) {
+      setLocationAssets([]);
+      return;
+    }
+    setLoadingLocAssets(true);
+    void listAssets({ location_id: Number(locationId), available_only: true, limit: 100 })
+      .then(setLocationAssets)
+      .catch(() => setLocationAssets([]))
+      .finally(() => setLoadingLocAssets(false));
+  }, [locationId, locAssetToken]);
 
   // Apply initialUpn (from deeplink) once user list arrives.
   useEffect(() => {
@@ -200,6 +227,30 @@ export default function EnrollEmployee({
       // toast surfaced the error
     } finally {
       setBusyDevice(null);
+    }
+  }
+
+  async function doAssignLocationAsset(asset: Asset) {
+    if (!selectedUser) return;
+    setBusyLocAsset(asset.id);
+    const label = asset.asset_tag ?? asset.serial_number;
+    try {
+      await toast.run(
+        () =>
+          assignAsset(asset.id, {
+            assigned_upn: selectedUser.user_principal_name,
+          }),
+        {
+          pending: `Assigning ${label}…`,
+          success: `Assigned ${label} to ${selectedUser.display_name ?? selectedUser.user_principal_name}`,
+          error: "Assign failed",
+        },
+      );
+      setLocAssetToken((t) => t + 1); // drops off the free list
+    } catch {
+      // toast surfaced the error
+    } finally {
+      setBusyLocAsset(null);
     }
   }
 
@@ -674,6 +725,31 @@ export default function EnrollEmployee({
               primary user in Intune.
             </p>
 
+            {/* Employee's location → surfaces free devices already on site */}
+            <div className="stack" style={{ gap: "0.375rem" }}>
+              <span className="eyebrow">Employee's location</span>
+              <div style={{ maxWidth: 360 }}>
+                <Select
+                  value={locationId}
+                  onChange={setLocationId}
+                  placeholder="Pick where the employee will sit…"
+                  searchable
+                  searchPlaceholder="Filter by name / code / city"
+                  options={[
+                    { value: "", label: "— none —" },
+                    ...locations.map((l) => ({
+                      value: String(l.id),
+                      label: locationLabel(l),
+                    })),
+                  ]}
+                />
+              </div>
+              <p className="text-muted text-xs" style={{ margin: 0 }}>
+                Reveals free devices already at that location, alongside the
+                warehouse staging pool below.
+              </p>
+            </div>
+
             {/* Currently assigned */}
             <div className="stack" style={{ gap: "0.375rem" }}>
               <span className="eyebrow">Currently assigned</span>
@@ -762,6 +838,78 @@ export default function EnrollEmployee({
                 </div>
               )}
             </div>
+
+            {/* Free devices already at the chosen location */}
+            {locationId && (
+              <div className="stack" style={{ gap: "0.375rem" }}>
+                <span className="eyebrow">
+                  Free at{" "}
+                  {locations.find((l) => String(l.id) === locationId)?.name ??
+                    "location"}{" "}
+                  ({locationAssets.length})
+                </span>
+                {loadingLocAssets && (
+                  <p className="text-muted text-sm" style={{ margin: 0 }}>
+                    Loading…
+                  </p>
+                )}
+                {!loadingLocAssets && locationAssets.length === 0 && (
+                  <p className="text-muted text-sm" style={{ margin: 0 }}>
+                    No free (unassigned) devices at this location.
+                  </p>
+                )}
+                {locationAssets.length > 0 && (
+                  <div className="card" style={{ padding: 0 }}>
+                    <div className="scroll-x">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Asset</th>
+                            <th>Serial</th>
+                            <th>Type</th>
+                            <th>Model</th>
+                            <th />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {locationAssets.map((a) => (
+                            <tr key={a.id}>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="btn btn-link btn-sm"
+                                  style={{ padding: 0 }}
+                                  onClick={() => onOpenAsset(a.id)}
+                                >
+                                  {a.asset_tag ?? a.serial_number}
+                                </button>
+                              </td>
+                              <td>
+                                <span className="font-mono text-xs">
+                                  {a.serial_number}
+                                </span>
+                              </td>
+                              <td>{a.asset_type}</td>
+                              <td>{a.override_model ?? a.model ?? "—"}</td>
+                              <td style={{ textAlign: "right" }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-primary btn-sm"
+                                  disabled={busyLocAsset === a.id}
+                                  onClick={() => void doAssignLocationAsset(a)}
+                                >
+                                  {busyLocAsset === a.id ? "…" : "Assign"}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </section>
 
           {/* Step 3 · Software */}

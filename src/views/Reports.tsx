@@ -69,6 +69,8 @@ interface ReportsProps {
   onGroupClick?: (groupId: string) => void;
   onUserClick?: (userId: string) => void;
   onLaunchWallboard?: () => void;
+  onBadgesClick?: (filter?: { linked?: boolean }) => void;
+  onOpenSection?: (kind: string) => void;
 }
 
 export default function Reports({
@@ -78,6 +80,8 @@ export default function Reports({
   onGroupClick,
   onUserClick,
   onLaunchWallboard,
+  onBadgesClick,
+  onOpenSection,
 }: ReportsProps) {
   const [tab, setTab] = useState<SubTab>("overview");
 
@@ -114,6 +118,8 @@ export default function Reports({
         <Dashboard
           onStatusClick={onStatusClick}
           onAssetClick={onAssetClick}
+          onBadgesClick={onBadgesClick}
+          onOpenSection={onOpenSection}
         />
       )}
       {tab === "fleet" && <FleetView />}
@@ -154,12 +160,171 @@ function FleetView() {
       <section className="stack-lg">
         <h2 className="text-lg font-semibold">Devices</h2>
         <FleetSliceView slice={data} showWin10Alert />
+        {data.warranty_x_compliance && (
+          <WarrantyComplianceMatrixView matrix={data.warranty_x_compliance} />
+        )}
       </section>
       <hr className="border-border" />
       <section className="stack-lg">
         <h2 className="text-lg font-semibold">Network Equipment</h2>
         <FleetSliceView slice={data.network} showWin10Alert={false} />
       </section>
+    </div>
+  );
+}
+
+function WarrantyComplianceMatrixView({
+  matrix,
+}: {
+  matrix: import("../types/reports").WarrantyComplianceMatrix;
+}) {
+  // Pivot the flat cell list into a row-major map for easy 2D rendering.
+  const get = (w: string, c: string) =>
+    matrix.cells.find((x) => x.warranty === w && x.compliance === c)?.count ??
+    0;
+
+  // Heat-color a cell by its share of the slice. Greens for the
+  // top-left (on warranty + compliant), red for the bottom row
+  // (unmanaged) and right column (non-compliant). Plain background for
+  // unknown-warranty rows.
+  function cellTint(w: string, c: string, count: number) {
+    if (count === 0) {
+      return {
+        bg: "rgb(var(--color-bg) / 0.4)",
+        fg: "rgb(var(--color-text-muted))",
+      };
+    }
+    if (w === "on" && c === "compliant") {
+      return {
+        bg: "rgb(from rgb(var(--color-success)) r g b / 0.20)",
+        fg: "rgb(var(--color-success))",
+      };
+    }
+    if (c === "unmanaged" || (w === "off" && c === "non_compliant")) {
+      return {
+        bg: "rgb(from rgb(var(--color-danger)) r g b / 0.18)",
+        fg: "rgb(var(--color-danger))",
+      };
+    }
+    if (w === "off" || c === "non_compliant") {
+      return {
+        bg: "rgb(from rgb(var(--color-warning)) r g b / 0.16)",
+        fg: "rgb(var(--color-warning))",
+      };
+    }
+    return {
+      bg: "rgb(var(--color-bg) / 0.6)",
+      fg: "rgb(var(--color-text))",
+    };
+  }
+
+  const compLabel = (c: string) =>
+    c === "compliant"
+      ? "Compliant"
+      : c === "non_compliant"
+        ? "Non-compliant"
+        : "Unmanaged";
+  const warrantyLabel = (w: string) =>
+    w === "on" ? "On warranty" : w === "off" ? "Off warranty" : "Unknown";
+
+  return (
+    <div className="card card-body stack">
+      <div className="cluster" style={{ justifyContent: "space-between" }}>
+        <span className="eyebrow">Warranty × Intune compliance</span>
+        <span className="text-muted text-xs">
+          {matrix.total} devices · device fleet only
+        </span>
+      </div>
+      <p className="text-muted text-sm" style={{ margin: 0 }}>
+        Cross-tab of fleet readiness. Green = ready to ship, yellow = needs
+        attention, red = blocked.
+      </p>
+      <div className="scroll-x">
+        <table
+          className="table"
+          style={{
+            margin: 0,
+            borderCollapse: "separate",
+            borderSpacing: 0,
+            fontSize: "0.85rem",
+          }}
+        >
+          <thead>
+            <tr>
+              <th style={{ background: "transparent" }} />
+              {matrix.compliance_axis.map((c) => (
+                <th
+                  key={c}
+                  style={{
+                    textAlign: "center",
+                    textTransform: "uppercase",
+                    fontSize: "0.7rem",
+                    letterSpacing: 0.5,
+                    color: "rgb(var(--color-text-muted))",
+                    padding: "0.45rem 0.65rem",
+                  }}
+                >
+                  {compLabel(c)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {matrix.warranty_axis.map((w) => (
+              <tr key={w}>
+                <th
+                  style={{
+                    textAlign: "left",
+                    textTransform: "uppercase",
+                    fontSize: "0.7rem",
+                    letterSpacing: 0.5,
+                    color: "rgb(var(--color-text-muted))",
+                    padding: "0.45rem 0.65rem",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {warrantyLabel(w)}
+                </th>
+                {matrix.compliance_axis.map((c) => {
+                  const count = get(w, c);
+                  const tint = cellTint(w, c, count);
+                  const pct = matrix.total
+                    ? Math.round((count / matrix.total) * 100)
+                    : 0;
+                  return (
+                    <td
+                      key={c}
+                      style={{
+                        textAlign: "center",
+                        padding: "0.65rem 0.85rem",
+                        background: tint.bg,
+                        color: tint.fg,
+                        borderRadius: 6,
+                        border: "1px solid rgb(var(--color-border) / 0.25)",
+                        fontWeight: 600,
+                      }}
+                      title={`${warrantyLabel(w)} · ${compLabel(c)}: ${count} (${pct}%)`}
+                    >
+                      <div style={{ fontSize: "1.1rem", lineHeight: 1.1 }}>
+                        {count}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "0.7rem",
+                          opacity: 0.75,
+                          fontWeight: 400,
+                        }}
+                      >
+                        {pct}%
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

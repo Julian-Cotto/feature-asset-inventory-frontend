@@ -6,9 +6,13 @@ import {
   Laptop,
   Mail,
   MapPin,
+  Package,
   Plus,
   RefreshCw,
   ShieldCheck,
+  Truck,
+  UserMinus,
+  UserPlus,
   X,
 } from "lucide-react";
 
@@ -21,6 +25,7 @@ import {
   avatarColorFor,
   initials,
 } from "../components/visual";
+import { listReservations } from "../services/inventory";
 import {
   assignDevice,
   getUser,
@@ -28,6 +33,7 @@ import {
   syncOneUser,
   unassignDevice,
 } from "../services/users";
+import type { ReservationRow } from "../types/inventory";
 import type {
   AssignableDevicesResponse,
   DeviceSummary,
@@ -47,9 +53,22 @@ function lastSignInDisplay(iso: string | null, status: SignInStatus): string {
 interface Props {
   userId: string;
   onBack: () => void;
+  onAssetClick?: (id: number) => void;
+  onDeploymentClick?: (id: number) => void;
+  onShipmentClick?: (id: number) => void;
+  onEnroll?: (upn: string) => void;
+  onOffboard?: (upn: string) => void;
 }
 
-export default function UserDetail({ userId, onBack }: Props) {
+export default function UserDetail({
+  userId,
+  onBack,
+  onAssetClick,
+  onDeploymentClick,
+  onShipmentClick,
+  onEnroll,
+  onOffboard,
+}: Props) {
   const confirm = useConfirm();
   const toast = useToast();
 
@@ -62,6 +81,8 @@ export default function UserDetail({ userId, onBack }: Props) {
   const [loadingPool, setLoadingPool] = useState(false);
   const [busyDevice, setBusyDevice] = useState<string | null>(null);
 
+  const [reservations, setReservations] = useState<ReservationRow[]>([]);
+
   const reload = () =>
     getUser(userId)
       .then(setDetail)
@@ -70,6 +91,19 @@ export default function UserDetail({ userId, onBack }: Props) {
   useEffect(() => {
     void reload();
   }, [userId]);
+
+  // Pending deliveries (shipments/deployments staged for this user).
+  // Refetched whenever the user's UPN becomes known.
+  useEffect(() => {
+    const upn = detail?.user.user_principal_name;
+    if (!upn) {
+      setReservations([]);
+      return;
+    }
+    void listReservations(upn)
+      .then(setReservations)
+      .catch(() => setReservations([]));
+  }, [detail?.user.user_principal_name]);
 
   const doSync = async () => {
     setSyncing(true);
@@ -188,19 +222,43 @@ export default function UserDetail({ userId, onBack }: Props) {
           <ChevronLeft size={14} />
           Back to Users
         </button>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={() => void doSync()}
-          disabled={syncing}
-        >
-          <RefreshCw
-            size={14}
-            className={syncing ? "animate-spin" : ""}
-            strokeWidth={1.75}
-          />
-          {syncing ? "Syncing…" : "Sync this user"}
-        </button>
+        <div className="cluster" style={{ gap: "0.5rem" }}>
+          {onEnroll && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => onEnroll(u.user_principal_name)}
+              title="Assign devices + software to this user"
+            >
+              <UserPlus size={14} strokeWidth={1.75} />
+              Enroll
+            </button>
+          )}
+          {onOffboard && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => onOffboard(u.user_principal_name)}
+              title="Collect devices, revoke software + badges for this user"
+            >
+              <UserMinus size={14} strokeWidth={1.75} />
+              Offboard
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => void doSync()}
+            disabled={syncing}
+          >
+            <RefreshCw
+              size={14}
+              className={syncing ? "animate-spin" : ""}
+              strokeWidth={1.75}
+            />
+            {syncing ? "Syncing…" : "Sync this user"}
+          </button>
+        </div>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
@@ -434,6 +492,110 @@ export default function UserDetail({ userId, onBack }: Props) {
           />
         )}
       </section>
+
+      {/* Pending deliveries — shipments + deployments staged for this
+          UPN. Hidden when nothing pending (the typical case). */}
+      {reservations.length > 0 && (
+        <section className="card stack" style={{ padding: "1.5rem" }}>
+          <SectionHeader
+            icon={<Package size={18} />}
+            title="Pending deliveries"
+            tint="info"
+            right={
+              <span className="text-muted text-sm">
+                {reservations.length}{" "}
+                {reservations.length === 1 ? "asset" : "assets"} reserved
+              </span>
+            }
+          />
+          <ul
+            className="stack"
+            style={{ listStyle: "none", padding: 0, margin: 0, gap: 6 }}
+          >
+            {reservations.map((r) => {
+              const isShipment = r.kind === "shipment";
+              return (
+                <li
+                  key={`${r.kind}-${r.source_id}-${r.asset_id}`}
+                  style={{
+                    border: "1px solid rgb(var(--color-border) / 0.4)",
+                    borderRadius: 8,
+                    padding: "0.55rem 0.75rem",
+                    display: "grid",
+                    gridTemplateColumns: "auto 1fr auto",
+                    gap: "0.75rem",
+                    alignItems: "center",
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      color: isShipment
+                        ? "rgb(var(--color-warning))"
+                        : "rgb(var(--color-info))",
+                    }}
+                  >
+                    {isShipment ? <Truck size={15} /> : <Package size={15} />}
+                  </span>
+                  <div className="stack" style={{ gap: 1, minWidth: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => onAssetClick?.(r.asset_id)}
+                      disabled={!onAssetClick}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        padding: 0,
+                        cursor: onAssetClick ? "pointer" : "default",
+                        color: onAssetClick
+                          ? "rgb(var(--color-primary))"
+                          : "rgb(var(--color-text))",
+                        fontWeight: 600,
+                        textAlign: "left",
+                      }}
+                      title="Open asset"
+                    >
+                      {r.intune_device_name?.trim() ||
+                        r.asset_tag?.trim() ||
+                        r.serial_number}
+                    </button>
+                    <span className="text-xs text-muted truncate">
+                      {r.asset_type}
+                      {r.model ? ` · ${r.model}` : ""}
+                      {" · "}
+                      <span className="font-mono">{r.serial_number}</span>
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() =>
+                      isShipment
+                        ? onShipmentClick?.(r.source_id)
+                        : onDeploymentClick?.(r.source_id)
+                    }
+                    disabled={
+                      isShipment ? !onShipmentClick : !onDeploymentClick
+                    }
+                  >
+                    {isShipment ? r.source_label : r.source_label}
+                    <span
+                      className="badge"
+                      style={{
+                        marginLeft: 6,
+                        fontSize: "0.65rem",
+                        padding: "1px 6px",
+                      }}
+                    >
+                      {r.source_status}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       {/* Available pool — only when actively assigning */}
       {showAssign && (

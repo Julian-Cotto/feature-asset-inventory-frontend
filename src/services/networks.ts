@@ -20,3 +20,13 @@ export const syncNetworks = () =>
 
 export const relinkNetworkAssets = () =>
   apiPost<{ assets_linked: number }>("/networks/relink-assets");
+
+export interface AxisControllerSummary {
+  id: string;
+  label: string;
+  base_url: string;
+  configured: boolean;
+}
+
+export const listAxisControllersForNetwork = (networkId: number) =>
+  apiGet<AxisControllerSummary[]>(`/networks/${networkId}/axis-controllers`);

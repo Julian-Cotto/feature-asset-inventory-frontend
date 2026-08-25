@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import Select from "../components/Select";
+import { StatTile, StatTileRow } from "../components/StatTile";
 import { listReservations } from "../services/inventory";
 import type { ReservationRow } from "../types/inventory";
 import { assetTypeBadgeClass, assetTypeLabel } from "../utils/assetTypeBadge";
@@ -53,19 +54,24 @@ export default function Reservations({
   const counts = useMemo(() => {
     const dep = rows.filter((r) => r.kind === "deployment").length;
     const ship = rows.filter((r) => r.kind === "shipment").length;
-    return { total: rows.length, dep, ship };
+    const inTransit = rows.filter((r) => r.source_status === "in_transit").length;
+    return { total: rows.length, dep, ship, inTransit };
   }, [rows]);
 
   return (
     <div className="stack-lg">
       <div className="cluster" style={{ justifyContent: "space-between" }}>
         <h2 className="heading-2">Reservations</h2>
-        <span className="text-muted text-sm">
-          {counts.total} total · {counts.dep} deployment · {counts.ship} shipment
-        </span>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
+
+      <StatTileRow>
+        <StatTile label="Reservations" value={counts.total} tone="neutral" />
+        <StatTile label="Via deployment" value={counts.dep} tone="neutral" />
+        <StatTile label="Via shipment" value={counts.ship} tone="neutral" />
+        <StatTile label="In transit" value={counts.inTransit} tone="warning" />
+      </StatTileRow>
 
       <div className="toolbar">
         <input

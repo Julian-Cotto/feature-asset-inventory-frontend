@@ -31,8 +31,17 @@ import { getAssetFacets, type AssetFacetRow } from "../services/inventory";
 import {
   downloadLocatorExport,
   locateAssets,
+  type LocatorQuery,
   type LocatorResult,
 } from "../services/assetLocator";
+
+/** True if `raw` looks like a MAC — 12 hex chars after stripping common
+ *  separators (`:`, `-`, `.`, whitespace). Anything else gets treated as
+ *  a serial number. */
+function isMac(raw: string): boolean {
+  const cleaned = raw.replace(/[\s:.\-]/g, "");
+  return /^[0-9A-Fa-f]{12}$/.test(cleaned);
+}
 
 interface Props {
   onAssetClick?: (id: number) => void;
@@ -89,6 +98,13 @@ export default function AssetLocatorPanel({
   const [pickerFilter, setPickerFilter] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  // Free-text serial/MAC chips. MAC vs serial classification happens at
+  // add time so the user sees what kind of match will run.
+  const [serials, setSerials] = useState<string[]>([]);
+  const [macs, setMacs] = useState<string[]>([]);
+  const [freeInput, setFreeInput] = useState("");
+  const [live, setLive] = useState(false);
+
   const [result, setResult] = useState<LocatorResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -141,15 +157,72 @@ export default function AssetLocatorPanel({
     });
   }
 
+  /** Split `text` on commas/whitespace/newlines, classify each value as MAC
+   *  or serial, append to the right chip list (dedup, case-insensitive). */
+  function ingestTokens(text: string) {
+    const parts = text
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (parts.length === 0) return;
+    const nextSerials = [...serials];
+    const nextMacs = [...macs];
+    for (const p of parts) {
+      if (isMac(p)) {
+        if (!nextMacs.some((m) => m.toLowerCase() === p.toLowerCase())) {
+          nextMacs.push(p);
+        }
+      } else {
+        if (!nextSerials.some((s) => s.toLowerCase() === p.toLowerCase())) {
+          nextSerials.push(p);
+        }
+      }
+    }
+    setSerials(nextSerials);
+    setMacs(nextMacs);
+  }
+
+  function commitFreeInput() {
+    if (!freeInput.trim()) return;
+    ingestTokens(freeInput);
+    setFreeInput("");
+  }
+
+  /** Triggered on every value change. If the user typed (or pasted)
+   *  anything containing a separator (newline, comma, tab, whitespace),
+   *  ingest the completed tokens immediately and keep only the
+   *  still-being-typed trailing fragment in the textarea. */
+  function handleFreeInputChange(v: string) {
+    if (/[\s,]/.test(v)) {
+      // Split off the trailing fragment (no terminator yet) so the user can
+      // keep typing it. Everything before it gets chipped.
+      const match = v.match(/([^\s,]*)$/);
+      const trailing = match ? match[1] : "";
+      const completed = trailing ? v.slice(0, -trailing.length) : v;
+      ingestTokens(completed);
+      setFreeInput(trailing);
+    } else {
+      setFreeInput(v);
+    }
+  }
+
+  function buildQuery(): LocatorQuery {
+    return { tokens: [...picked], serials, macs };
+  }
+
+  function queryIsEmpty(): boolean {
+    return picked.size === 0 && serials.length === 0 && macs.length === 0;
+  }
+
   async function runSearch() {
-    if (picked.size === 0) {
-      setError("Pick at least one model first.");
+    if (queryIsEmpty()) {
+      setError("Pick a model or type a serial/MAC first.");
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      const r = await locateAssets([...picked]);
+      const r = await locateAssets(buildQuery(), false, live);
       setResult(r);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -159,18 +232,21 @@ export default function AssetLocatorPanel({
   }
 
   async function doExport(fmt: "csv" | "xlsx") {
-    if (picked.size === 0) {
-      setError("Pick at least one model first.");
+    if (queryIsEmpty()) {
+      setError("Pick a model or type a serial/MAC first.");
       return;
     }
     setExportOpen(false);
     setDownloading(fmt);
     try {
-      await downloadLocatorExport([...picked], fmt);
+      const query = buildQuery();
+      await downloadLocatorExport(query, fmt, false, live);
+      const total =
+        query.tokens.length + query.serials.length + query.macs.length;
       toast.notify({
         kind: "success",
         title: `Export ready (${fmt.toUpperCase()})`,
-        detail: `${picked.size} model${picked.size === 1 ? "" : "s"} queried`,
+        detail: `${total} term${total === 1 ? "" : "s"} queried`,
       });
     } catch (e) {
       toast.notify({
@@ -223,7 +299,7 @@ export default function AssetLocatorPanel({
     <section className="card stack" style={{ padding: "1.5rem" }}>
       <SectionHeader
         icon={<Search size={18} />}
-        title="Locate assets by model"
+        title="Locate assets"
         tint="teal"
         right={
           result && (
@@ -236,9 +312,11 @@ export default function AssetLocatorPanel({
         }
       />
       <p className="text-muted text-sm" style={{ margin: 0 }}>
-        Pick one or more model series — every device that matches is grouped
-        by the network it currently sits on. Substring match: picking
-        "ThinkBook" catches all variants.
+        Pick a model series, paste serial numbers, or paste MAC addresses —
+        results group by the network each device currently sits on. Model
+        match is substring ("ThinkBook" catches all variants); serial match
+        is suffix (handles Intune-truncated serials); MAC match is exact
+        and accepts any separator format.
       </p>
 
       {/* Picker row */}
@@ -372,13 +450,35 @@ export default function AssetLocatorPanel({
           )}
         </div>
 
+        <label
+          className="cluster text-xs text-muted"
+          style={{
+            gap: "0.35rem",
+            alignItems: "center",
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+          }}
+          title="Slower: hits Meraki /clients/search live for every MAC the cache can't place on a network."
+        >
+          <input
+            type="checkbox"
+            checked={live}
+            onChange={(e) => setLive(e.target.checked)}
+          />
+          Live Meraki lookup
+        </label>
+
         <button
           type="button"
           className="btn btn-primary"
           onClick={() => void runSearch()}
-          disabled={loading || picked.size === 0}
+          disabled={loading || queryIsEmpty()}
         >
-          {loading ? "Searching…" : "Find devices"}
+          {loading
+            ? live
+              ? "Searching (live)…"
+              : "Searching…"
+            : "Find devices"}
         </button>
 
         {/* Export dropdown */}
@@ -386,9 +486,7 @@ export default function AssetLocatorPanel({
           <button
             type="button"
             className="btn btn-secondary"
-            disabled={
-              picked.size === 0 || downloading !== null
-            }
+            disabled={queryIsEmpty() || downloading !== null}
             onClick={() => setExportOpen((v) => !v)}
             title="Export the current selection (re-runs the search server-side)"
           >
@@ -426,12 +524,141 @@ export default function AssetLocatorPanel({
         </div>
       </div>
 
+      {/* Serial/MAC free-text row */}
+      <div
+        className="stack"
+        style={{ gap: "0.4rem" }}
+      >
+        <div
+          className="cluster"
+          style={{ gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}
+        >
+          <textarea
+            className="input"
+            placeholder="Paste serial numbers or MAC addresses — one per line, comma, or space. Each item becomes a removable pill."
+            value={freeInput}
+            onChange={(e) => handleFreeInputChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                commitFreeInput();
+              }
+            }}
+            onBlur={() => commitFreeInput()}
+            rows={2}
+            style={{
+              flex: "1 1 24rem",
+              minWidth: "20rem",
+              resize: "vertical",
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: "0.85rem",
+            }}
+          />
+          {(serials.length > 0 || macs.length > 0) && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => {
+                setSerials([]);
+                setMacs([]);
+              }}
+            >
+              Clear all ({serials.length + macs.length})
+            </button>
+          )}
+        </div>
+        {(serials.length > 0 || macs.length > 0) && (
+          <div
+            className="cluster"
+            style={{ gap: "0.35rem", flexWrap: "wrap" }}
+          >
+            {serials.map((s) => (
+              <span
+                key={`sn-${s}`}
+                className="badge"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  background:
+                    "rgb(from rgb(var(--color-info)) r g b / 0.16)",
+                  color: "rgb(var(--color-info))",
+                  borderColor: "transparent",
+                  fontFamily:
+                    "ui-monospace, SFMono-Regular, Menlo, monospace",
+                }}
+                title="Serial (suffix match)"
+              >
+                SN · {s}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSerials((prev) => prev.filter((x) => x !== s))
+                  }
+                  aria-label={`Remove serial ${s}`}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "inherit",
+                    cursor: "pointer",
+                    padding: 0,
+                    display: "inline-flex",
+                    alignItems: "center",
+                  }}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+            {macs.map((m) => (
+              <span
+                key={`mac-${m}`}
+                className="badge"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  background:
+                    "rgb(from rgb(var(--color-warning)) r g b / 0.16)",
+                  color: "rgb(var(--color-warning))",
+                  borderColor: "transparent",
+                  fontFamily:
+                    "ui-monospace, SFMono-Regular, Menlo, monospace",
+                }}
+                title="MAC (exact match)"
+              >
+                MAC · {m}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setMacs((prev) => prev.filter((x) => x !== m))
+                  }
+                  aria-label={`Remove MAC ${m}`}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "inherit",
+                    cursor: "pointer",
+                    padding: 0,
+                    display: "inline-flex",
+                    alignItems: "center",
+                  }}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
       {error && <div className="alert alert-error">{error}</div>}
 
       {/* Result groups */}
       {result && result.matched === 0 && (
         <p className="text-muted text-sm" style={{ margin: 0 }}>
-          No devices match the picked model(s).
+          No devices match the current query.
         </p>
       )}
       {result && result.groups.length > 0 && (

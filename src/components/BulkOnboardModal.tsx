@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Loader2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, X } from "lucide-react";
 
 import ScanInput from "./ScanInput";
 import Select from "./Select";
 import {
+  listLocations,
   listStatuses,
   lookupAssetBySerial,
   lookupDevice,
@@ -12,9 +13,11 @@ import {
 import type {
   AssetStatus,
   AssetType,
+  Location,
   LookupResult,
 } from "../types/inventory";
 import { assetTypeLabel } from "../utils/assetTypeBadge";
+import { locationLabel } from "../utils/locationLabel";
 import { normalizeOs } from "../utils/normalizeOs";
 
 const TYPE_OPTIONS: { value: AssetType; label: string }[] = [
@@ -24,6 +27,12 @@ const TYPE_OPTIONS: { value: AssetType; label: string }[] = [
   { value: "ap", label: "Access point" },
   { value: "switch", label: "Switch" },
   { value: "gateway", label: "Gateway" },
+  { value: "pos_aio", label: "POS (Windows AIO)" },
+  { value: "pos_thin_client", label: "POS (thin client)" },
+  { value: "pos_tablet", label: "POS tablet" },
+  { value: "card_reader", label: "Credit card reader" },
+  { value: "printer_office", label: "Office printer" },
+  { value: "printer_receipt", label: "Receipt printer" },
 ];
 
 type RowStatus = "looking" | "duplicate" | "ready" | "error";
@@ -47,8 +56,19 @@ export default function BulkOnboardModal({ onCreated, onCancel }: Props) {
   const [defaultType, setDefaultType] = useState<AssetType>("laptop");
   const [statusCode, setStatusCode] = useState("active");
   const [statuses, setStatuses] = useState<AssetStatus[]>([]);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [locationId, setLocationId] = useState<number | "">("");
   const [rows, setRows] = useState<Row[]>([]);
   const [scanInput, setScanInput] = useState("");
+  const [pasteText, setPasteText] = useState("");
+  const [showPaste, setShowPaste] = useState(false);
+  // Collapse the shared defaults by default on phones so the scanned-items
+  // list gets the vertical room — the whole point is to see what you scanned.
+  const [showDefaults, setShowDefaults] = useState(
+    () =>
+      typeof window === "undefined" ||
+      !window.matchMedia("(max-width: 640px)").matches,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progressDone, setProgressDone] = useState(0);
@@ -56,6 +76,9 @@ export default function BulkOnboardModal({ onCreated, onCancel }: Props) {
   useEffect(() => {
     listStatuses()
       .then(setStatuses)
+      .catch(() => {});
+    listLocations()
+      .then(setLocations)
       .catch(() => {});
   }, []);
 
@@ -128,6 +151,44 @@ export default function BulkOnboardModal({ onCreated, onCancel }: Props) {
     void runRowChecks(id, trimmed);
   }
 
+  function newId(): string {
+    return typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random()}`;
+  }
+
+  /** Paste-to-add: split a blob (newlines / commas / whitespace) into
+   *  serials, dedupe within the paste AND against existing rows, append all
+   *  at once, then kick off lookups. Much faster than scanning a printed
+   *  list one at a time. */
+  function addSerials(blob: string) {
+    const tokens = blob
+      .split(/[\s,;]+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (tokens.length === 0) return;
+
+    const existing = new Set(rows.map((r) => r.serial));
+    const fresh: Row[] = [];
+    for (const serial of tokens) {
+      if (existing.has(serial)) continue;
+      existing.add(serial);
+      fresh.push({
+        id: newId(),
+        serial,
+        type: defaultType,
+        status: "looking",
+        lookup: null,
+        duplicateAssetId: null,
+      });
+    }
+    if (fresh.length === 0) return;
+    setRows((rs) => [...rs, ...fresh]);
+    setPasteText("");
+    setShowPaste(false);
+    for (const r of fresh) void runRowChecks(r.id, r.serial);
+  }
+
   function removeRow(id: string) {
     setRows((rs) => rs.filter((r) => r.id !== id));
   }
@@ -156,6 +217,7 @@ export default function BulkOnboardModal({ onCreated, onCancel }: Props) {
           serial_number: row.serial,
           asset_type: row.type,
           status_code: statusCode,
+          location_id: locationId === "" ? null : Number(locationId),
           manufacturer: row.lookup?.manufacturer ?? null,
           model: row.lookup?.model ?? null,
           series: row.lookup?.series ?? null,
@@ -203,11 +265,19 @@ export default function BulkOnboardModal({ onCreated, onCancel }: Props) {
     >
       <div
         className="modal-panel"
-        style={{ maxWidth: "780px", maxHeight: "90vh" }}
+        style={{
+          maxWidth: "780px",
+          width: "100%",
+          maxHeight: "92vh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
       >
+        {/* Header — pinned */}
         <div
           className="cluster"
-          style={{ justifyContent: "space-between", marginBottom: "0.25rem" }}
+          style={{ justifyContent: "space-between", flexShrink: 0 }}
         >
           <h3 className="modal-title">Bulk onboard</h3>
           <button
@@ -222,63 +292,160 @@ export default function BulkOnboardModal({ onCreated, onCancel }: Props) {
           </button>
         </div>
 
-        <p className="text-muted text-sm" style={{ marginTop: 0 }}>
-          Scan serial numbers to add rows. Each row adopts the default type;
-          edit individually or use “Mark all as…”. Vendor lookup runs in the
-          background — submit any time.
-        </p>
+        {/* Controls — pinned */}
+        <div className="stack" style={{ gap: "0.5rem", flexShrink: 0 }}>
+          {/* Defaults — collapsible so the scanned list gets the room */}
+          <button
+            type="button"
+            onClick={() => setShowDefaults((v) => !v)}
+            className="cluster"
+            style={{
+              justifyContent: "space-between",
+              width: "100%",
+              background: "transparent",
+              border: "none",
+              padding: "0.15rem 0",
+              cursor: "pointer",
+              color: "rgb(var(--color-text-muted))",
+            }}
+          >
+            <span className="text-xs" style={{ letterSpacing: "0.04em" }}>
+              Defaults
+              {!showDefaults && (
+                <span style={{ opacity: 0.8 }}>
+                  {" · "}
+                  {defaultType} · {statusCode}
+                  {locationId !== "" ? " · location set" : ""}
+                </span>
+              )}
+            </span>
+            {showDefaults ? (
+              <ChevronDown size={14} />
+            ) : (
+              <ChevronRight size={14} />
+            )}
+          </button>
 
-        <div className="form-row">
-          <div className="field">
-            <label className="label">Default type for new scans</label>
-            <Select
-              value={defaultType}
-              onChange={(v) => setDefaultType(v as AssetType)}
+          {showDefaults && (
+            <>
+              <div className="form-row">
+                <div className="field">
+                  <label className="label">Type for new scans</label>
+                  <Select
+                    value={defaultType}
+                    onChange={(v) => setDefaultType(v as AssetType)}
+                    disabled={submitting}
+                    options={TYPE_OPTIONS.map((o) => ({
+                      value: o.value,
+                      label: o.label,
+                    }))}
+                  />
+                </div>
+                <div className="field">
+                  <label className="label">Status (all)</label>
+                  <Select
+                    value={statusCode}
+                    onChange={setStatusCode}
+                    disabled={submitting}
+                    options={statuses.map((s) => ({
+                      value: s.code,
+                      label: s.label,
+                    }))}
+                  />
+                </div>
+              </div>
+              <div className="field">
+                <label className="label">Location (all)</label>
+                <Select
+                  value={locationId === "" ? "" : String(locationId)}
+                  onChange={(v) => setLocationId(v === "" ? "" : Number(v))}
+                  disabled={submitting}
+                  searchable
+                  searchPlaceholder="Filter by name / address / city"
+                  placeholder="— none —"
+                  options={[
+                    { value: "", label: "— none —" },
+                    ...locations.map((l) => ({
+                      value: String(l.id),
+                      label: locationLabel(l),
+                    })),
+                  ]}
+                />
+              </div>
+            </>
+          )}
+
+          <ScanInput
+            value={scanInput}
+            onChange={setScanInput}
+            onScan={handleScan}
+            label="Scan serial"
+            autoFocus
+          />
+
+          <div className="cluster" style={{ justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setShowPaste((v) => !v)}
               disabled={submitting}
-              options={TYPE_OPTIONS.map((o) => ({
-                value: o.value,
-                label: o.label,
-              }))}
-            />
+            >
+              {showPaste ? "Hide paste box" : "Paste a list of serials…"}
+            </button>
           </div>
-          <div className="field">
-            <label className="label">Status (applied to all)</label>
-            <Select
-              value={statusCode}
-              onChange={setStatusCode}
-              disabled={submitting}
-              options={statuses.map((s) => ({
-                value: s.code,
-                label: s.label,
-              }))}
-            />
-          </div>
+          {showPaste && (
+            <div className="field">
+              <textarea
+                className="textarea"
+                rows={3}
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+                placeholder="Paste serials — one per line, or comma/space separated"
+                style={{ resize: "vertical", minHeight: "4rem" }}
+              />
+              <div
+                className="cluster"
+                style={{ justifyContent: "flex-end", marginTop: "0.5rem" }}
+              >
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => addSerials(pasteText)}
+                  disabled={submitting || !pasteText.trim()}
+                >
+                  Add rows
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
-        <ScanInput
-          value={scanInput}
-          onChange={setScanInput}
-          onScan={handleScan}
-          label="Scan serial"
-          autoFocus
-        />
-
-        {rows.length > 0 && (
-          <>
-            <div
-              className="cluster"
-              style={{
-                justifyContent: "space-between",
-                marginTop: "0.25rem",
-                gap: "0.5rem",
-              }}
-            >
-              <span className="text-sm text-text-muted">
-                {rows.length} row{rows.length === 1 ? "" : "s"}
-                {stillLookingUp ? " · identifying…" : ""}
-              </span>
-              <div className="cluster" style={{ gap: "0.25rem" }}>
-                <span className="text-xs text-text-muted">Mark all as:</span>
+        {/* Scanned items — the flexible, always-visible scroll area */}
+        <div
+          className="stack"
+          style={{ flex: 1, minHeight: 0, gap: "0.4rem", marginTop: "0.25rem" }}
+        >
+          <div
+            className="cluster"
+            style={{
+              justifyContent: "space-between",
+              gap: "0.5rem",
+              flexWrap: "wrap",
+              flexShrink: 0,
+            }}
+          >
+            <span className="text-sm font-medium">
+              Scanned{rows.length > 0 ? ` (${rows.length})` : ""}
+              {stillLookingUp && (
+                <span className="text-text-muted"> · identifying…</span>
+              )}
+            </span>
+            {rows.length > 0 && (
+              <div
+                className="cluster"
+                style={{ gap: "0.25rem", flexWrap: "wrap" }}
+              >
+                <span className="text-xs text-text-muted">Mark all:</span>
                 {TYPE_OPTIONS.slice(0, 4).map((o) => (
                   <button
                     key={o.value}
@@ -291,107 +458,143 @@ export default function BulkOnboardModal({ onCreated, onCancel }: Props) {
                   </button>
                 ))}
               </div>
-            </div>
+            )}
+          </div>
 
+          {rows.length === 0 ? (
+            <div
+              style={{
+                flex: 1,
+                minHeight: "4rem",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                textAlign: "center",
+                padding: "1.25rem",
+                border: "1px dashed rgb(var(--color-border) / 0.6)",
+                borderRadius: "0.75rem",
+                color: "rgb(var(--color-text-muted))",
+              }}
+            >
+              <span className="text-sm">
+                Scan or paste serials — they’ll appear here to review and remove.
+              </span>
+            </div>
+          ) : (
             <ul
               className="list-clean stack"
               style={{
-                maxHeight: "40vh",
+                flex: 1,
+                minHeight: 0,
                 overflowY: "auto",
                 gap: "0.4rem",
-                marginTop: "0.5rem",
+                paddingRight: 2,
               }}
             >
               {rows.map((r) => (
                 <li
                   key={r.id}
-                  className="cluster"
+                  className="stack"
                   style={{
-                    padding: "0.5rem 0.75rem",
+                    gap: "0.4rem",
+                    padding: "0.5rem 0.6rem",
                     background: "rgb(var(--color-surface-muted))",
                     border: "1px solid rgb(var(--color-border) / 0.5)",
                     borderRadius: "0.75rem",
-                    justifyContent: "space-between",
-                    gap: "0.625rem",
-                    flexWrap: "nowrap",
                   }}
                 >
-                  <span
-                    className="font-mono text-sm truncate"
-                    style={{ minWidth: "8ch", maxWidth: "16ch" }}
-                    title={r.serial}
-                  >
-                    {r.serial}
-                  </span>
-
+                  {/* Line 1: the scanned barcode + remove (always reachable) */}
                   <div
-                    style={{ flex: 1, minWidth: 0 }}
-                    className="text-xs text-text-muted truncate"
+                    className="cluster"
+                    style={{ justifyContent: "space-between", gap: "0.5rem" }}
                   >
-                    {r.status === "looking" && (
-                      <span className="cluster" style={{ gap: "0.3rem" }}>
-                        <Loader2
-                          size={12}
-                          className="animate-spin"
-                          aria-hidden
-                        />
-                        looking up…
-                      </span>
-                    )}
-                    {r.status === "ready" && r.lookup?.model && (
-                      <span title={`${r.lookup.manufacturer ?? ""} ${r.lookup.model}`}>
-                        {r.lookup.manufacturer} {r.lookup.model}
-                      </span>
-                    )}
-                    {r.status === "ready" && !r.lookup?.model && (
-                      <span className="text-text-muted">no vendor match</span>
-                    )}
-                    {r.status === "duplicate" && (
-                      <span className="badge badge-warning">
-                        Already exists #{r.duplicateAssetId}
-                      </span>
-                    )}
-                    {r.status === "error" && (
-                      <span className="badge badge-danger" title={r.errorMessage}>
-                        Failed
-                      </span>
-                    )}
+                    <span
+                      className="font-mono text-sm"
+                      style={{ flex: 1, minWidth: 0, wordBreak: "break-all" }}
+                      title={r.serial}
+                    >
+                      {r.serial}
+                    </span>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => removeRow(r.id)}
+                      disabled={submitting}
+                      title="Remove"
+                      aria-label={`Remove ${r.serial}`}
+                      style={{ flexShrink: 0 }}
+                    >
+                      <X size={16} />
+                    </button>
                   </div>
 
-                  <div style={{ width: "10rem", flexShrink: 0 }}>
-                    <Select
-                      value={r.type}
-                      onChange={(v) =>
-                        patchRow(r.id, { type: v as AssetType })
-                      }
-                      disabled={r.status === "duplicate" || submitting}
-                      size="sm"
-                      options={TYPE_OPTIONS.map((o) => ({
-                        value: o.value,
-                        label: assetTypeLabel(o.value),
-                      }))}
-                    />
-                  </div>
-
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    onClick={() => removeRow(r.id)}
-                    disabled={submitting}
-                    title="Remove"
-                    aria-label={`Remove ${r.serial}`}
+                  {/* Line 2: lookup status + per-row type override */}
+                  <div
+                    className="cluster"
+                    style={{
+                      justifyContent: "space-between",
+                      gap: "0.5rem",
+                      flexWrap: "wrap",
+                    }}
                   >
-                    <X size={14} />
-                  </button>
+                    <div
+                      style={{ flex: "1 1 8rem", minWidth: 0 }}
+                      className="text-xs text-text-muted truncate"
+                    >
+                      {r.status === "looking" && (
+                        <span className="cluster" style={{ gap: "0.3rem" }}>
+                          <Loader2 size={12} className="animate-spin" aria-hidden />
+                          looking up…
+                        </span>
+                      )}
+                      {r.status === "ready" && r.lookup?.model && (
+                        <span
+                          title={`${r.lookup.manufacturer ?? ""} ${r.lookup.model}`}
+                        >
+                          {r.lookup.manufacturer} {r.lookup.model}
+                        </span>
+                      )}
+                      {r.status === "ready" && !r.lookup?.model && (
+                        <span className="text-text-muted">no vendor match</span>
+                      )}
+                      {r.status === "duplicate" && (
+                        <span className="badge badge-warning">
+                          Already exists #{r.duplicateAssetId}
+                        </span>
+                      )}
+                      {r.status === "error" && (
+                        <span className="badge badge-danger" title={r.errorMessage}>
+                          Failed
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ flex: "0 1 10rem", minWidth: "8rem" }}>
+                      <Select
+                        value={r.type}
+                        onChange={(v) => patchRow(r.id, { type: v as AssetType })}
+                        disabled={r.status === "duplicate" || submitting}
+                        size="sm"
+                        options={TYPE_OPTIONS.map((o) => ({
+                          value: o.value,
+                          label: assetTypeLabel(o.value),
+                        }))}
+                      />
+                    </div>
+                  </div>
                 </li>
               ))}
             </ul>
-          </>
+          )}
+        </div>
+
+        {error && (
+          <div className="alert alert-error" style={{ flexShrink: 0 }}>
+            {error}
+          </div>
         )}
 
-        {error && <div className="alert alert-error">{error}</div>}
-
-        <div className="modal-actions">
+        {/* Footer — pinned */}
+        <div className="modal-actions" style={{ flexShrink: 0 }}>
           <button
             type="button"
             className="btn btn-secondary btn-sm"

@@ -3,6 +3,7 @@ import type {
   AssignableDevicesResponse,
   IntuneUser,
   UserDetail,
+  UserSoftwareAssignment,
   UserSyncResult,
 } from "../types/user";
 
@@ -30,4 +31,9 @@ export const assignDevice = (userId: string, deviceId: string) =>
 export const unassignDevice = (userId: string, deviceId: string) =>
   apiPost<{ ok: boolean; device_id: string }>(
     `/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}/unassign`,
+  );
+
+export const listUserSoftware = (userId: string) =>
+  apiGet<UserSoftwareAssignment[]>(
+    `/users/${encodeURIComponent(userId)}/software`,
   );

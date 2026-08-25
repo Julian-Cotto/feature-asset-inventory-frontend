@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { ShieldCheck } from "lucide-react";
 
 import {
   archiveAsset,
   assignAsset,
+  bulkSetLocation,
   changeAssetStatus,
   collectDefenderForensics,
   getAsset,
@@ -15,8 +17,10 @@ import {
   updateAsset,
 } from "../services/inventory";
 import AssetNetworkAppearances from "../components/AssetNetworkAppearances";
+import MerakiClaimPanel from "../components/MerakiClaimPanel";
 import { useConfirm } from "../components/ConfirmProvider";
 import { useToast } from "../components/ToastProvider";
+import { listBadges, type Badge } from "../services/badges";
 import { listUsers } from "../services/users";
 import type { IntuneUser } from "../types/user";
 import Select from "../components/Select";
@@ -36,9 +40,15 @@ interface Props {
   assetId: number;
   onBack: () => void;
   onNetworkClick?: (id: number) => void;
+  onBadgeClick?: (token: string) => void;
 }
 
-export default function AssetDetail({ assetId, onBack, onNetworkClick }: Props) {
+export default function AssetDetail({
+  assetId,
+  onBack,
+  onNetworkClick,
+  onBadgeClick,
+}: Props) {
   const [asset, setAsset] = useState<Asset | null>(null);
   const [history, setHistory] = useState<AssetHistoryEntry[]>([]);
   const [statuses, setStatuses] = useState<AssetStatus[]>([]);
@@ -53,6 +63,12 @@ export default function AssetDetail({ assetId, onBack, onNetworkClick }: Props) 
   const [forensicsBusy, setForensicsBusy] = useState(false);
   const [overrideModelDraft, setOverrideModelDraft] = useState("");
   const [savingOverride, setSavingOverride] = useState(false);
+
+  // Badges held by the assigned user. Loaded lazily once we know the
+  // asset has an assigned_upn — re-fetched if assignment changes.
+  const [linkedBadges, setLinkedBadges] = useState<Badge[] | null>(null);
+  const [badgesLoading, setBadgesLoading] = useState(false);
+  const [showArchivedBadges, setShowArchivedBadges] = useState(false);
   const confirm = useConfirm();
   const toast = useToast();
 
@@ -106,6 +122,35 @@ export default function AssetDetail({ assetId, onBack, onNetworkClick }: Props) 
     listUsers().then(setUsers).catch(() => {});
   }, [assetId]);
 
+  // Pull every Axis badge whose linked UPN matches the assigned user.
+  // Re-runs when assignment changes (so badges card refreshes after
+  // assign/unassign without a full reload).
+  useEffect(() => {
+    const upn = asset?.assigned_upn;
+    if (!upn) {
+      setLinkedBadges(null);
+      return;
+    }
+    setBadgesLoading(true);
+    void listBadges({
+      search: upn,
+      linked: true,
+      include_archived: true,
+      limit: 100,
+    })
+      .then((r) =>
+        setLinkedBadges(
+          r.rows.filter(
+            (b) =>
+              (b.linked_intune_user_upn ?? "").toLowerCase() ===
+              upn.toLowerCase(),
+          ),
+        ),
+      )
+      .catch(() => setLinkedBadges([]))
+      .finally(() => setBadgesLoading(false));
+  }, [asset?.assigned_upn]);
+
   if (error) return <div className="alert alert-error">{error}</div>;
   if (!asset) return <p className="text-muted">Loading…</p>;
 
@@ -114,6 +159,10 @@ export default function AssetDetail({ assetId, onBack, onNetworkClick }: Props) 
     asset.asset_type === "laptop" ||
     asset.asset_type === "desktop" ||
     asset.asset_type === "thin_client";
+  const isMerakiGear =
+    asset.asset_type === "gateway" ||
+    asset.asset_type === "switch" ||
+    asset.asset_type === "ap";
 
   async function handleIntuneSync() {
     if (!asset) return;
@@ -341,8 +390,25 @@ export default function AssetDetail({ assetId, onBack, onNetworkClick }: Props) 
 
       {isComputer && asset.intune_synced_at && (
         <section className="card card-body stack mt-4">
-          <div className="cluster" style={{ justifyContent: "space-between" }}>
-            <span className="eyebrow">Defender for Endpoint</span>
+          <div
+            className="cluster"
+            style={{
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: "0.75rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <div
+              className="cluster"
+              style={{ gap: "0.5rem", alignItems: "center" }}
+            >
+              <ShieldCheck size={16} />
+              <h3 className="heading-3" style={{ margin: 0 }}>
+                Security · Defender
+              </h3>
+              <SecurityHeadlineChip asset={asset} />
+            </div>
             {asset.defender_id && !isArchived && (
               <button
                 type="button"
@@ -381,6 +447,10 @@ export default function AssetDetail({ assetId, onBack, onNetworkClick }: Props) 
               <KV k="AV status" v={asset.defender_av_status ?? "—"} />
               <KV k="OS build" v={asset.defender_os_build ?? "—"} />
               <KV k="Last IP" v={asset.defender_last_ip ?? "—"} mono />
+              <KV
+                k="MAC address"
+                v={<MacCell mac={asset.mac_address} toast={toast} />}
+              />
               <KV
                 k="Last seen by Defender"
                 v={
@@ -541,6 +611,45 @@ export default function AssetDetail({ assetId, onBack, onNetworkClick }: Props) 
                     Unassign
                   </button>
                 )}
+                {asset.location_id !== null && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: "Remove this asset's location?",
+                        tone: "warning",
+                        confirmLabel: "Clear location",
+                        cancelLabel: "Cancel",
+                        message: (
+                          <p>
+                            This unsets <strong>{asset.location_name ?? asset.location_id}</strong>{" "}
+                            on the asset. The assignment to{" "}
+                            {asset.assigned_upn ?? "—"} stays in place.
+                          </p>
+                        ),
+                      });
+                      if (!ok) return;
+                      try {
+                        await bulkSetLocation([asset.id], null);
+                        toast.notify({
+                          kind: "success",
+                          title: "Location cleared",
+                          detail: `Asset ${asset.serial_number}`,
+                        });
+                        void reload();
+                      } catch (e) {
+                        toast.notify({
+                          kind: "danger",
+                          title: "Clear failed",
+                          detail: e instanceof Error ? e.message : String(e),
+                        });
+                      }
+                    }}
+                  >
+                    Clear location
+                  </button>
+                )}
               </div>
           </section>
 
@@ -594,10 +703,218 @@ export default function AssetDetail({ assetId, onBack, onNetworkClick }: Props) 
         </div>
       )}
 
+      {isMerakiGear && !isArchived && (
+        <div className="mt-4">
+          <MerakiClaimPanel
+            serial={asset.serial_number}
+            assetId={asset.id}
+            initialStatus={
+              asset.meraki_claim_status as
+                | "claimed"
+                | "already_in_org"
+                | "claimed_elsewhere"
+                | "invalid"
+                | "meraki_disabled"
+                | "error"
+                | null
+            }
+            onResult={(r) =>
+              setAsset((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      meraki_claim_status: r.status,
+                      meraki_claim_checked_at:
+                        r.checked_at ?? new Date().toISOString(),
+                    }
+                  : prev,
+              )
+            }
+          />
+        </div>
+      )}
+
       <AssetNetworkAppearances
         assetId={asset.id}
         onNetworkClick={onNetworkClick}
       />
+
+      {/* Access badges held by the assigned user. Hidden when no UPN
+          assignment — for stock / warehouse devices the card would be
+          empty noise. */}
+      {asset.assigned_upn && (
+        <section className="card card-body stack mt-4">
+          <h3 className="heading-3" style={{ margin: 0 }}>
+            Access badges
+          </h3>
+          <p className="text-muted text-sm" style={{ margin: 0 }}>
+            Badges currently linked to{" "}
+            <span className="font-mono">{asset.assigned_upn}</span>.
+          </p>
+          {badgesLoading && <p className="text-muted text-sm">Loading…</p>}
+          {!badgesLoading && linkedBadges && linkedBadges.length === 0 && (
+            <p
+              className="text-muted text-sm"
+              style={{ fontStyle: "italic", margin: 0 }}
+            >
+              No badges linked to this user.
+            </p>
+          )}
+          {!badgesLoading &&
+            linkedBadges &&
+            linkedBadges.length > 0 &&
+            (() => {
+              const visible = linkedBadges.filter((b) =>
+                showArchivedBadges ? true : b.archived_at === null,
+              );
+              const hasArchived = linkedBadges.some(
+                (b) => b.archived_at !== null,
+              );
+              return (
+                <>
+                  <div
+                    className="cluster"
+                    style={{ gap: "0.5rem", alignItems: "center" }}
+                  >
+                    <span className="text-xs text-muted">
+                      {visible.length} of {linkedBadges.length} shown
+                    </span>
+                    {hasArchived && (
+                      <label
+                        className="cluster text-xs"
+                        style={{
+                          gap: 4,
+                          alignItems: "center",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={showArchivedBadges}
+                          onChange={(e) =>
+                            setShowArchivedBadges(e.target.checked)
+                          }
+                        />
+                        Include archived
+                      </label>
+                    )}
+                  </div>
+                  <ul
+                    className="stack"
+                    style={{
+                      listStyle: "none",
+                      padding: 0,
+                      margin: 0,
+                      gap: 6,
+                    }}
+                  >
+                    {visible.map((b) => {
+                      const name =
+                        b.axis_last_name && b.axis_first_name
+                          ? `${b.axis_last_name}, ${b.axis_first_name}`
+                          : b.axis_full_name?.trim() || null;
+                      return (
+                        <li key={b.token}>
+                          <button
+                            type="button"
+                            onClick={() => onBadgeClick?.(b.token)}
+                            disabled={!onBadgeClick}
+                            style={{
+                              width: "100%",
+                              textAlign: "left",
+                              padding: "0.55rem 0.75rem",
+                              background: "transparent",
+                              border:
+                                "1px solid rgb(var(--color-border) / 0.4)",
+                              borderRadius: 8,
+                              cursor: onBadgeClick ? "pointer" : "default",
+                              color: "rgb(var(--color-text))",
+                              display: "grid",
+                              gridTemplateColumns: "1fr auto",
+                              gap: "0.75rem",
+                              alignItems: "center",
+                              opacity: b.archived_at !== null ? 0.6 : 1,
+                            }}
+                            onMouseEnter={(e) => {
+                              if (onBadgeClick)
+                                e.currentTarget.style.background =
+                                  "rgb(var(--color-bg) / 0.5)";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.background = "transparent";
+                            }}
+                          >
+                            <div
+                              className="stack"
+                              style={{ gap: 1, minWidth: 0 }}
+                            >
+                              <span className="font-medium truncate">
+                                {name || (
+                                  <span
+                                    className="text-muted"
+                                    style={{ fontStyle: "italic" }}
+                                  >
+                                    Unnamed credential
+                                  </span>
+                                )}
+                              </span>
+                              <span className="text-xs text-muted truncate">
+                                {b.controller_label ?? b.controller_id}
+                                {" · "}
+                                <span className="font-mono">
+                                  card {b.card_nr ?? "—"}
+                                </span>
+                                {b.facility_code
+                                  ? ` · FAC ${b.facility_code}`
+                                  : ""}
+                              </span>
+                            </div>
+                            <div
+                              className="cluster"
+                              style={{ gap: 6, alignItems: "center" }}
+                            >
+                              {b.archived_at && (
+                                <span
+                                  className="badge"
+                                  style={{
+                                    fontSize: "0.65rem",
+                                    padding: "1px 6px",
+                                    background:
+                                      "rgb(from rgb(var(--color-warning)) r g b / 0.16)",
+                                    color: "rgb(var(--color-warning))",
+                                    borderColor: "transparent",
+                                  }}
+                                >
+                                  archived
+                                </span>
+                              )}
+                              <span
+                                className="badge"
+                                style={{
+                                  fontSize: "0.7rem",
+                                  padding: "2px 8px",
+                                  background: b.enabled
+                                    ? "rgb(from rgb(var(--color-success)) r g b / 0.16)"
+                                    : "rgb(from rgb(var(--color-text-muted)) r g b / 0.18)",
+                                  color: b.enabled
+                                    ? "rgb(var(--color-success))"
+                                    : "rgb(var(--color-text-muted))",
+                                  borderColor: "transparent",
+                                }}
+                              >
+                                {b.enabled ? "enabled" : "disabled"}
+                              </span>
+                            </div>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              );
+            })()}
+        </section>
+      )}
 
       <section className="stack mt-6">
         <h3 className="heading-3">History</h3>
@@ -649,6 +966,50 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function Grid({ children }: { children: React.ReactNode }) {
   return <div className="grid-3 mt-3">{children}</div>;
+}
+
+function MacCell({
+  mac,
+  toast,
+}: {
+  mac: string | null;
+  toast: ReturnType<typeof useToast>;
+}) {
+  if (!mac) return <span className="text-text">—</span>;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(mac);
+      toast.notify({
+        kind: "success",
+        title: "MAC copied",
+        detail: mac,
+      });
+    } catch (e) {
+      toast.notify({
+        kind: "danger",
+        title: "Copy failed",
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      className="text-mono"
+      style={{
+        background: "transparent",
+        border: "none",
+        padding: 0,
+        cursor: "pointer",
+        color: "rgb(var(--color-text))",
+        textAlign: "left",
+      }}
+      title="Click to copy"
+    >
+      {mac}
+    </button>
+  );
 }
 
 function KV({
@@ -725,6 +1086,82 @@ function DefenderStub({ asset }: { asset: Asset }) {
         />
       </Grid>
     </div>
+  );
+}
+
+type SecurityTone = "ok" | "warn" | "bad" | "muted";
+
+function securitySnapshot(asset: Asset): {
+  tone: SecurityTone;
+  label: string;
+} {
+  if (!asset.defender_id) {
+    return { tone: "muted", label: "Not Defender-managed" };
+  }
+  const risk = (asset.defender_risk_score ?? "").toLowerCase();
+  const health = (asset.defender_health_status ?? "").toLowerCase();
+  if (
+    risk === "high" ||
+    health === "inactive" ||
+    health.includes("nosensordata")
+  ) {
+    return {
+      tone: "bad",
+      label: `At risk · ${asset.defender_risk_score ?? health ?? "unhealthy"}`,
+    };
+  }
+  if (risk === "medium" || health === "impairedcommunication") {
+    return {
+      tone: "warn",
+      label: `Attention · ${asset.defender_risk_score ?? health ?? "—"}`,
+    };
+  }
+  if (health === "active" && (risk === "" || risk === "none" || risk === "low" || risk === "informational")) {
+    return { tone: "ok", label: `Healthy · ${asset.defender_risk_score ?? "low"}` };
+  }
+  return { tone: "muted", label: "Status unknown" };
+}
+
+function SecurityHeadlineChip({ asset }: { asset: Asset }) {
+  const snap = securitySnapshot(asset);
+  const palette: Record<SecurityTone, { bg: string; fg: string }> = {
+    ok: {
+      bg: "rgb(from rgb(var(--color-success)) r g b / 0.18)",
+      fg: "rgb(var(--color-success))",
+    },
+    warn: {
+      bg: "rgb(from rgb(var(--color-warning)) r g b / 0.18)",
+      fg: "rgb(var(--color-warning))",
+    },
+    bad: {
+      bg: "rgb(from rgb(var(--color-danger)) r g b / 0.18)",
+      fg: "rgb(var(--color-danger))",
+    },
+    muted: {
+      bg: "rgb(var(--color-bg) / 0.5)",
+      fg: "rgb(var(--color-text-muted))",
+    },
+  };
+  const c = palette[snap.tone];
+  return (
+    <span
+      className="badge"
+      style={{
+        background: c.bg,
+        color: c.fg,
+        borderColor: "transparent",
+        fontSize: "0.75rem",
+        padding: "3px 10px",
+        textTransform: "capitalize",
+      }}
+      title={
+        asset.defender_last_seen_at
+          ? `Last seen ${new Date(asset.defender_last_seen_at).toLocaleString()}`
+          : undefined
+      }
+    >
+      {snap.label}
+    </span>
   );
 }
 

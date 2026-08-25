@@ -3,11 +3,14 @@ import {
   ChevronLeft,
   ChevronRight,
   RefreshCw,
+  UserMinus,
   UserPlus,
 } from "lucide-react";
 
 import { useConfirm } from "../components/ConfirmProvider";
+import ExportDropdown from "../components/ExportDropdown";
 import { useToast } from "../components/ToastProvider";
+import { downloadUsersExport } from "../services/exports";
 import { AccentPill, Avatar, FreshnessCell } from "../components/visual";
 import { listUsers, syncAllUsers } from "../services/users";
 import type { IntuneUser } from "../types/user";
@@ -15,12 +18,13 @@ import type { IntuneUser } from "../types/user";
 interface Props {
   onSelect: (userId: string) => void;
   onEnroll: () => void;
+  onOffboard: () => void;
 }
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 25;
 
-export default function Users({ onSelect, onEnroll }: Props) {
+export default function Users({ onSelect, onEnroll, onOffboard }: Props) {
   const confirm = useConfirm();
   const toast = useToast();
   const [users, setUsers] = useState<IntuneUser[]>([]);
@@ -110,6 +114,15 @@ export default function Users({ onSelect, onEnroll }: Props) {
           <button
             type="button"
             className="btn btn-secondary btn-sm"
+            onClick={onOffboard}
+            title="Pick a departing user and collect devices, revoke software + badges"
+          >
+            <UserMinus size={14} strokeWidth={1.75} />
+            Offboard Employee
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
             onClick={() => void doSync()}
             disabled={syncing}
             title="Pull all active member users from Microsoft Graph"
@@ -121,6 +134,10 @@ export default function Users({ onSelect, onEnroll }: Props) {
             />
             {syncing ? "Syncing…" : "Sync from Graph"}
           </button>
+          <ExportDropdown
+            entityName="users"
+            onExport={(fmt) => downloadUsersExport(fmt)}
+          />
         </div>
       </div>
 

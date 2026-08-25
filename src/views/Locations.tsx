@@ -1,8 +1,17 @@
 import { useEffect, useState } from "react";
-import { MapPin, Plus, RefreshCw, Trash2, Warehouse } from "lucide-react";
+import {
+  CheckCircle2,
+  CircleSlash,
+  MapPin,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Warehouse,
+} from "lucide-react";
 
 import Select from "../components/Select";
 import {
+  bulkSetLocationsActive,
   createLocation,
   deleteLocation,
   listLocations,
@@ -10,17 +19,74 @@ import {
   updateLocation,
   type LocationSyncResult,
 } from "../services/inventory";
+import ExportDropdown from "../components/ExportDropdown";
+import { downloadLocationsExport } from "../services/exports";
 import type { Location, LocationType } from "../types/inventory";
 import { useAlert, useConfirm } from "../components/ConfirmProvider";
 import { useToast } from "../components/ToastProvider";
 import { AccentPill, Avatar, SectionHeader } from "../components/visual";
 
-export default function Locations() {
+interface LocationsProps {
+  onSelect?: (id: number) => void;
+}
+
+export default function Locations({ onSelect }: LocationsProps = {}) {
   const confirm = useConfirm();
   const alertModal = useAlert();
   const toast = useToast();
   const [locations, setLocations] = useState<Location[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  function toggleSelect(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const allSelected =
+    locations.length > 0 && locations.every((l) => selected.has(l.id));
+
+  function toggleSelectAll() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        locations.forEach((l) => next.delete(l.id));
+      } else {
+        locations.forEach((l) => next.add(l.id));
+      }
+      return next;
+    });
+  }
+
+  async function runBulkSetActive(isActive: boolean) {
+    if (selected.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const r = await bulkSetLocationsActive([...selected], isActive);
+      const verb = isActive ? "activated" : "deactivated";
+      toast.notify({
+        kind: "success",
+        title: `${r.updated} location${r.updated === 1 ? "" : "s"} ${verb}`,
+        detail: `${r.requested} requested · ${r.skipped} skipped`,
+      });
+      setSelected(new Set());
+      const fresh = await listLocations(true);
+      setLocations(fresh);
+    } catch (e) {
+      toast.notify({
+        kind: "danger",
+        title: "Bulk update failed",
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
@@ -89,20 +155,26 @@ export default function Locations() {
     <div className="stack-lg">
       <div className="cluster" style={{ justifyContent: "space-between" }}>
         <h2 className="heading-2">Locations</h2>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          onClick={() => void doSync()}
-          disabled={syncing}
-          title="Pull corporate locations from Snowflake"
-        >
-          <RefreshCw
-            size={14}
-            className={syncing ? "animate-spin" : ""}
-            strokeWidth={1.75}
+        <div className="cluster" style={{ gap: "0.5rem" }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => void doSync()}
+            disabled={syncing}
+            title="Pull corporate locations from Snowflake"
+          >
+            <RefreshCw
+              size={14}
+              className={syncing ? "animate-spin" : ""}
+              strokeWidth={1.75}
+            />
+            {syncing ? "Syncing…" : "Sync from Snowflake"}
+          </button>
+          <ExportDropdown
+            entityName="locations"
+            onExport={(fmt) => downloadLocationsExport(fmt, true)}
           />
-          {syncing ? "Syncing…" : "Sync from Snowflake"}
-        </button>
+        </div>
       </div>
       {error && <div className="alert alert-error">{error}</div>}
       {syncResult && (
@@ -187,10 +259,64 @@ export default function Locations() {
             </span>
           }
         />
+        {selected.size > 0 && (
+          <div
+            className="cluster"
+            style={{
+              gap: "0.5rem",
+              alignItems: "center",
+              padding: "0.5rem 0.75rem",
+              borderRadius: 8,
+              background:
+                "rgb(from rgb(var(--color-primary)) r g b / 0.08)",
+              border:
+                "1px solid rgb(from rgb(var(--color-primary)) r g b / 0.3)",
+            }}
+          >
+            <span className="text-sm">
+              <strong>{selected.size}</strong> selected
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={bulkBusy}
+              onClick={() => void runBulkSetActive(true)}
+            >
+              <CheckCircle2 size={13} />
+              Activate
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={bulkBusy}
+              onClick={() => void runBulkSetActive(false)}
+            >
+              <CircleSlash size={13} />
+              Deactivate
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={bulkBusy}
+              onClick={() => setSelected(new Set())}
+            >
+              Clear
+            </button>
+          </div>
+        )}
         <div className="scroll-x">
           <table className="table">
             <thead>
               <tr>
+                <th style={{ width: "2rem" }}>
+                  <input
+                    type="checkbox"
+                    className="checkbox"
+                    checked={allSelected}
+                    onChange={toggleSelectAll}
+                    aria-label="Select all locations"
+                  />
+                </th>
                 <th>Location</th>
                 <th>Type</th>
                 <th>Address</th>
@@ -200,23 +326,66 @@ export default function Locations() {
             </thead>
             <tbody>
               {locations.map((l) => (
-                <tr key={l.id} style={{ opacity: l.is_active ? 1 : 0.55 }}>
+                <tr
+                  key={l.id}
+                  style={{
+                    opacity: l.is_active ? 1 : 0.55,
+                    background: selected.has(l.id)
+                      ? "rgb(from rgb(var(--color-primary)) r g b / 0.10)"
+                      : undefined,
+                  }}
+                >
+                  <td
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ width: "2rem" }}
+                  >
+                    <input
+                      type="checkbox"
+                      className="checkbox"
+                      checked={selected.has(l.id)}
+                      onChange={() => toggleSelect(l.id)}
+                      aria-label={`Select ${l.name}`}
+                    />
+                  </td>
                   <td>
-                    <div
+                    <button
+                      type="button"
+                      onClick={() => onSelect?.(l.id)}
+                      disabled={!onSelect}
                       className="cluster"
-                      style={{ gap: "0.625rem", flexWrap: "nowrap" }}
+                      style={{
+                        gap: "0.625rem",
+                        flexWrap: "nowrap",
+                        background: "transparent",
+                        border: "none",
+                        padding: 0,
+                        cursor: onSelect ? "pointer" : "default",
+                        color: "rgb(var(--color-text))",
+                        textAlign: "left",
+                        width: "100%",
+                      }}
+                      title={onSelect ? "View detail" : undefined}
                     >
                       <Avatar seed={l.code} name={l.name} />
                       <div
                         className="stack"
                         style={{ gap: 1, minWidth: 0 }}
                       >
-                        <span className="font-medium truncate">{l.name}</span>
+                        <span
+                          className="font-medium truncate"
+                          style={{
+                            color: onSelect
+                              ? "rgb(var(--color-primary))"
+                              : undefined,
+                          }}
+                        >
+                          {l.name}
+                        </span>
                         <span className="font-mono text-xs text-muted truncate">
                           {l.code}
                         </span>
                       </div>
-                    </div>
+                    </button>
                   </td>
                   <td>
                     <span

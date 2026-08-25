@@ -1,3 +1,4 @@
+import { ApiError } from "../lib/errors";
 import { resolveFeatureAuthContext } from "../platform/authAdapter";
 import {
   getFeatureMountContext,
@@ -58,20 +59,32 @@ function buildUrl(path: string): string {
   return `${normalizedBaseUrl}${normalizedPath}`;
 }
 
-async function parseResponse<T>(response: Response): Promise<T> {
-  if (response.status === 401) {
-    throw new Error("Request was rejected as unauthorized.");
-  }
-
-  if (response.status === 403) {
-    throw new Error("Request was rejected as forbidden.");
-  }
-
+async function parseResponse<T>(
+  response: Response,
+  ctx: { method: string; url: string },
+): Promise<T> {
   if (!response.ok) {
-    const bodyText = await response.text();
-    throw new Error(
-      `API request failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ""}`,
-    );
+    // Read the body once so the error carries the server's message/traceback.
+    let bodyText = "";
+    try {
+      bodyText = await response.text();
+    } catch {
+      /* body already consumed / unreadable */
+    }
+    const serverMsg = extractServerMessage(bodyText);
+    const base =
+      response.status === 401
+        ? "Request was rejected as unauthorized."
+        : response.status === 403
+          ? "Request was rejected as forbidden."
+          : `Request failed: ${response.status} ${response.statusText}`;
+    throw new ApiError(serverMsg ? `${base} — ${serverMsg}` : base, {
+      status: response.status,
+      statusText: response.statusText,
+      method: ctx.method,
+      url: ctx.url,
+      body: bodyText || undefined,
+    });
   }
 
   if (response.status === 204) {
@@ -86,16 +99,39 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
+/** FastAPI returns `{"detail": ...}`; pull out a concise human message. */
+function extractServerMessage(bodyText: string): string | null {
+  if (!bodyText) return null;
+  try {
+    const parsed = JSON.parse(bodyText);
+    const detail = parsed?.detail ?? parsed?.message ?? parsed?.error;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+      // FastAPI validation errors: [{loc, msg, type}, …]
+      return detail
+        .map((d) => (typeof d?.msg === "string" ? d.msg : JSON.stringify(d)))
+        .join("; ");
+    }
+    if (detail != null) return JSON.stringify(detail);
+  } catch {
+    // Non-JSON body — return a trimmed snippet.
+    return bodyText.length > 300 ? `${bodyText.slice(0, 300)}…` : bodyText;
+  }
+  return null;
+}
+
 export async function apiFetch<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const response = await fetch(buildUrl(path), {
+  const url = buildUrl(path);
+  const method = (init?.method ?? "GET").toUpperCase();
+  const response = await fetch(url, {
     ...init,
     headers: buildHeaders(init?.headers),
   });
 
-  return parseResponse<T>(response);
+  return parseResponse<T>(response, { method, url });
 }
 
 /** Fetch with auth header but expect a binary body. Returns the raw Blob
@@ -105,15 +141,32 @@ export async function apiFetchBlob(
   path: string,
   init?: RequestInit,
 ): Promise<{ blob: Blob; filename: string | null }> {
-  const response = await fetch(buildUrl(path), {
+  const url = buildUrl(path);
+  const method = (init?.method ?? "GET").toUpperCase();
+  const response = await fetch(url, {
     ...init,
     headers: buildHeaders(init?.headers),
   });
 
   if (!response.ok) {
-    const bodyText = await response.text();
-    throw new Error(
-      `API request failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ""}`,
+    let bodyText = "";
+    try {
+      bodyText = await response.text();
+    } catch {
+      /* unreadable */
+    }
+    const serverMsg = extractServerMessage(bodyText);
+    throw new ApiError(
+      serverMsg
+        ? `Request failed: ${response.status} ${response.statusText} — ${serverMsg}`
+        : `Request failed: ${response.status} ${response.statusText}`,
+      {
+        status: response.status,
+        statusText: response.statusText,
+        method,
+        url,
+        body: bodyText || undefined,
+      },
     );
   }
 

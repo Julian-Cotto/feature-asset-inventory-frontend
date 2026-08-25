@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Plus, RefreshCw } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  RefreshCw,
+} from "lucide-react";
 
 import { useConfirm } from "../components/ConfirmProvider";
+import ExportDropdown from "../components/ExportDropdown";
 import { useToast } from "../components/ToastProvider";
+import { downloadSoftwareExport } from "../services/exports";
 import Select from "../components/Select";
 import {
   AccentPill,
@@ -10,6 +19,7 @@ import {
   FreshnessCell,
 } from "../components/visual";
 import {
+  bulkArchiveSoftware,
   createSoftware,
   listSoftware,
   listSoftwareCategories,
@@ -51,6 +61,22 @@ export default function SoftwareView({ onSelect }: Props) {
   const [includeArchived, setIncludeArchived] = useState(false);
 
   const [page, setPage] = useState(1);
+
+  // Bulk select state — only applies to currently-visible rows.
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  useEffect(() => {
+    setSelected(new Set());
+  }, [filter, sourceFilter, categoryFilter, includeArchived, page]);
+
+  function toggleSelect(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
 
   const reload = () =>
@@ -133,6 +159,44 @@ export default function SoftwareView({ onSelect }: Props) {
   const safePage = Math.min(page, totalPages);
   const start = (safePage - 1) * pageSize;
   const paged = filtered.slice(start, start + pageSize);
+  const allSelectedOnPage =
+    paged.length > 0 && paged.every((s) => selected.has(s.id));
+
+  function toggleSelectAll() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelectedOnPage) {
+        paged.forEach((s) => next.delete(s.id));
+      } else {
+        paged.forEach((s) => next.add(s.id));
+      }
+      return next;
+    });
+  }
+
+  async function runBulkArchive(archived: boolean) {
+    if (selected.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const r = await bulkArchiveSoftware([...selected], archived);
+      const verb = archived ? "archived" : "restored";
+      toast.notify({
+        kind: "success",
+        title: `${r.updated} software ${verb}`,
+        detail: `${r.requested} requested · ${r.skipped} skipped`,
+      });
+      setSelected(new Set());
+      await reload();
+    } catch (e) {
+      toast.notify({
+        kind: "danger",
+        title: "Bulk archive failed",
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   useEffect(() => {
     setPage(1);
@@ -166,6 +230,20 @@ export default function SoftwareView({ onSelect }: Props) {
             />
             {syncing ? "Syncing…" : "Sync from Intune"}
           </button>
+          <ExportDropdown
+            entityName="software"
+            onExport={(fmt) =>
+              downloadSoftwareExport(
+                {
+                  q: filter || undefined,
+                  source: sourceFilter || undefined,
+                  category: categoryFilter || undefined,
+                  include_archived: includeArchived,
+                },
+                fmt,
+              )
+            }
+          />
         </div>
       </div>
 
@@ -258,11 +336,65 @@ export default function SoftwareView({ onSelect }: Props) {
         </div>
       </section>
 
+      {selected.size > 0 && (
+        <div
+          className="cluster"
+          style={{
+            gap: "0.5rem",
+            alignItems: "center",
+            padding: "0.5rem 0.75rem",
+            borderRadius: 8,
+            background:
+              "rgb(from rgb(var(--color-primary)) r g b / 0.08)",
+            border:
+              "1px solid rgb(from rgb(var(--color-primary)) r g b / 0.3)",
+          }}
+        >
+          <span className="text-sm">
+            <strong>{selected.size}</strong> selected
+          </span>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            disabled={bulkBusy}
+            onClick={() => void runBulkArchive(true)}
+          >
+            <Archive size={13} />
+            Archive
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            disabled={bulkBusy}
+            onClick={() => void runBulkArchive(false)}
+          >
+            <ArchiveRestore size={13} />
+            Restore
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            disabled={bulkBusy}
+            onClick={() => setSelected(new Set())}
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       <div className="card">
         <div className="scroll-x">
           <table className="table">
             <thead>
               <tr>
+                <th style={{ width: "2rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={allSelectedOnPage}
+                    onChange={toggleSelectAll}
+                    aria-label="Select all on this page"
+                  />
+                </th>
                 <th>Software</th>
                 <th>Vendor</th>
                 <th>Category</th>
@@ -279,7 +411,26 @@ export default function SoftwareView({ onSelect }: Props) {
                   key={s.id}
                   className="row-clickable"
                   onClick={() => onSelect(s.id)}
+                  style={
+                    selected.has(s.id)
+                      ? {
+                          background:
+                            "rgb(from rgb(var(--color-primary)) r g b / 0.10)",
+                        }
+                      : undefined
+                  }
                 >
+                  <td
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ width: "2rem" }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(s.id)}
+                      onChange={() => toggleSelect(s.id)}
+                      aria-label={`Select ${s.name}`}
+                    />
+                  </td>
                   <td>
                     <div
                       className="cluster"

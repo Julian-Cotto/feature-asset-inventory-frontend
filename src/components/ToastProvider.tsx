@@ -11,10 +11,14 @@ import {
 import {
   CheckCircle2,
   Info,
+  ListTree,
   TriangleAlert,
   X,
   XCircle,
 } from "lucide-react";
+
+import ErrorDetailModal from "./ErrorDetailModal";
+import { toErrorDetails, type ErrorDetails } from "../lib/errors";
 
 export type ToastKind = "info" | "success" | "warning" | "danger";
 
@@ -23,6 +27,9 @@ interface Toast {
   kind: ToastKind;
   title: string;
   detail?: string;
+  /** Rich, structured error info. When present the toast shows a
+   *  "Details" button that opens the error-detail modal. */
+  details?: ErrorDetails;
   /** ms until auto-dismiss. 0 = persistent until user closes. */
   duration: number;
 }
@@ -62,6 +69,7 @@ const ICONS: Record<ToastKind, typeof Info> = {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [inflightCount, setInflightCount] = useState(0);
+  const [detailToast, setDetailToast] = useState<Toast | null>(null);
   const nextId = useRef(1);
   const timers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
@@ -75,10 +83,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const notify = useCallback<ToastContextValue["notify"]>(
-    ({ kind, title, detail, duration }) => {
+    ({ kind, title, detail, details, duration }) => {
       const id = nextId.current++;
-      const finalDuration = duration ?? DEFAULT_DURATION[kind];
-      setToasts((prev) => [...prev, { id, kind, title, detail, duration: finalDuration }]);
+      // A toast with drill-in details defaults to persistent so it doesn't
+      // vanish before the user can open the detail view.
+      const finalDuration = duration ?? (details ? 0 : DEFAULT_DURATION[kind]);
+      setToasts((prev) => [
+        ...prev,
+        { id, kind, title, detail, details, duration: finalDuration },
+      ]);
       if (finalDuration > 0) {
         const t = setTimeout(() => dismiss(id), finalDuration);
         timers.current.set(id, t);
@@ -111,8 +124,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           typeof messages.error === "function"
             ? messages.error(err)
             : messages.error ?? "Action failed";
-        const detail = err instanceof Error ? err.message : String(err);
-        notify({ kind: "danger", title: errorTitle, detail });
+        const details = toErrorDetails(err, {
+          title: errorTitle,
+          occurredAt: new Date().toLocaleString(),
+        });
+        notify({ kind: "danger", title: errorTitle, detail: details.message, details });
         throw err;
       } finally {
         setInflightCount((c) => Math.max(0, c - 1));
@@ -146,6 +162,30 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 <div className="toast-body">
                   <div className="toast-title">{t.title}</div>
                   {t.detail && <div className="toast-detail">{t.detail}</div>}
+                  {t.details && (
+                    <button
+                      type="button"
+                      onClick={() => setDetailToast(t)}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "0.3rem",
+                        marginTop: "0.4rem",
+                        padding: "0.2rem 0.5rem",
+                        fontSize: "0.75rem",
+                        fontWeight: 600,
+                        borderRadius: 6,
+                        border: "1px solid currentColor",
+                        background: "transparent",
+                        color: "inherit",
+                        opacity: 0.9,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <ListTree size={13} strokeWidth={1.75} />
+                      View details
+                    </button>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -159,6 +199,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             );
           })}
         </div>
+      )}
+      {detailToast?.details && (
+        <ErrorDetailModal
+          details={detailToast.details}
+          title={detailToast.title}
+          onClose={() => setDetailToast(null)}
+        />
       )}
     </ToastContext.Provider>
   );

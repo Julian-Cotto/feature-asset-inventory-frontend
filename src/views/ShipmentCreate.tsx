@@ -1,4 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import {
+  ArrowDownToLine,
+  ArrowLeft,
+  ArrowUpFromLine,
+  Cpu,
+  StickyNote,
+  Truck,
+} from "lucide-react";
 
 import {
   listAssets,
@@ -8,6 +16,7 @@ import { createShipment, detectCarrier } from "../services/shipments";
 import type { Asset, AssetType, Location } from "../types/inventory";
 import ScanInput from "../components/ScanInput";
 import Select from "../components/Select";
+import { SectionHeader, type SectionTint } from "../components/visual";
 import { friendlyModel } from "../utils/friendlyModel";
 import { locationLabel } from "../utils/locationLabel";
 import type {
@@ -40,6 +49,12 @@ const ASSET_TYPE_OPTIONS: { value: AssetType; label: string }[] = [
   { value: "ap", label: "Access point" },
   { value: "switch", label: "Switch" },
   { value: "gateway", label: "Gateway" },
+  { value: "pos_aio", label: "POS (Windows AIO)" },
+  { value: "pos_thin_client", label: "POS (thin client)" },
+  { value: "pos_tablet", label: "POS tablet" },
+  { value: "card_reader", label: "Credit card reader" },
+  { value: "printer_office", label: "Office printer" },
+  { value: "printer_receipt", label: "Receipt printer" },
 ];
 
 const EMPTY_ADDRESS: AddressInput = {
@@ -202,56 +217,65 @@ export default function ShipmentCreate({ onCreated, onCancel }: Props) {
       <div className="cluster" style={{ justifyContent: "space-between" }}>
         <h2 className="heading-2">New shipment</h2>
         <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>
-          ← Back
+          <ArrowLeft size={14} /> Back
         </button>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
 
-      <div className="form">
+      <div className="stack-lg">
         {/* Tracking + carrier + direction */}
-        <ScanInput
-          value={trackingNumber}
-          onChange={setTrackingNumber}
-          onScan={(v) => setTrackingNumber(v)}
-          label="Tracking number (scan or type)"
-          placeholder="e.g. 1Z..., 12-digit FedEx, etc."
-          autoFocus={false}
-        />
-        <div className="form-row">
-          <Field label="Carrier (auto-detected)">
-            <Select
-              value={carrier}
-              onChange={(v) => setCarrier(v as ShipmentCarrier)}
-              options={CARRIER_OPTIONS.map((o) => ({
-                value: o.value,
-                label: o.label,
-              }))}
-            />
-          </Field>
-          <Field label="Direction">
-            <Select
-              value={direction}
-              onChange={(v) => setDirection(v as ShipmentDirection)}
-              options={DIRECTION_OPTIONS.map((o) => ({
-                value: o.value,
-                label: o.label,
-              }))}
-            />
-          </Field>
-        </div>
-        <Field label="Description (optional)">
-          <input
-            className="input"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="e.g. Q1 onboarding batch to Boston"
+        <section className="card stack" style={{ padding: "1.5rem" }}>
+          <SectionHeader
+            icon={<Truck size={18} />}
+            title="Shipment details"
+            tint="info"
           />
-        </Field>
+          <ScanInput
+            value={trackingNumber}
+            onChange={setTrackingNumber}
+            onScan={(v) => setTrackingNumber(v)}
+            label="Tracking number (scan or type)"
+            placeholder="e.g. 1Z..., 12-digit FedEx, etc."
+            autoFocus={false}
+          />
+          <div className="form-row">
+            <Field label="Carrier (auto-detected)">
+              <Select
+                value={carrier}
+                onChange={(v) => setCarrier(v as ShipmentCarrier)}
+                options={CARRIER_OPTIONS.map((o) => ({
+                  value: o.value,
+                  label: o.label,
+                }))}
+              />
+            </Field>
+            <Field label="Direction">
+              <Select
+                value={direction}
+                onChange={(v) => setDirection(v as ShipmentDirection)}
+                options={DIRECTION_OPTIONS.map((o) => ({
+                  value: o.value,
+                  label: o.label,
+                }))}
+              />
+            </Field>
+          </div>
+          <Field label="Description (optional)">
+            <input
+              className="input"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="e.g. Q1 onboarding batch to Boston"
+            />
+          </Field>
+        </section>
 
         {/* From / To */}
         <AddressBlock
           label="From"
+          icon={<ArrowUpFromLine size={18} />}
+          tint="amber"
           locationId={fromLocationId}
           setLocationId={setFromLocationId}
           address={fromAddress}
@@ -260,6 +284,8 @@ export default function ShipmentCreate({ onCreated, onCancel }: Props) {
         />
         <AddressBlock
           label="To"
+          icon={<ArrowDownToLine size={18} />}
+          tint="pink"
           locationId={toLocationId}
           setLocationId={setToLocationId}
           address={toAddress}
@@ -267,8 +293,10 @@ export default function ShipmentCreate({ onCreated, onCancel }: Props) {
           locations={locations}
         />
 
-        {/* Items mode toggle */}
-        <Field label="Assets">
+        {/* Items */}
+        <section className="card stack" style={{ padding: "1.5rem" }}>
+          <SectionHeader icon={<Cpu size={18} />} title="Assets" tint="green" />
+          <Field label="Selection mode">
           <div className="cluster">
             <button
               type="button"
@@ -441,24 +469,35 @@ export default function ShipmentCreate({ onCreated, onCancel }: Props) {
             </p>
           </div>
         )}
+        </section>
 
-        <Field label="Notes (optional)">
-          <textarea
-            className="textarea"
-            rows={3}
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
+        {/* Notes */}
+        <section className="card stack" style={{ padding: "1.5rem" }}>
+          <SectionHeader
+            icon={<StickyNote size={18} />}
+            title="Notes"
+            tint="purple"
           />
-        </Field>
+          <Field label="Notes (optional)">
+            <textarea
+              className="textarea"
+              rows={3}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+          </Field>
+        </section>
 
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={!canSubmit || submitting}
-          onClick={() => void submit()}
-        >
-          {submitting ? "Creating…" : "Create shipment"}
-        </button>
+        <div className="cluster" style={{ justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!canSubmit || submitting}
+            onClick={() => void submit()}
+          >
+            {submitting ? "Creating…" : "Create shipment"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -475,6 +514,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 interface AddressBlockProps {
   label: string;
+  icon: React.ReactNode;
+  tint: SectionTint;
   locationId: number | "";
   setLocationId: (v: number | "") => void;
   address: AddressInput;
@@ -484,6 +525,8 @@ interface AddressBlockProps {
 
 function AddressBlock({
   label,
+  icon,
+  tint,
   locationId,
   setLocationId,
   address,
@@ -491,8 +534,8 @@ function AddressBlock({
   locations,
 }: AddressBlockProps) {
   return (
-    <div className="stack">
-      <div className="eyebrow">{label}</div>
+    <section className="card stack" style={{ padding: "1.5rem" }}>
+      <SectionHeader icon={icon} title={label} tint={tint} />
       <Field label="Saved location (optional)">
         <Select
           value={locationId === "" ? "" : String(locationId)}
@@ -579,6 +622,6 @@ function AddressBlock({
           />
         </Field>
       </div>
-    </div>
+    </section>
   );
 }

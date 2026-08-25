@@ -22,6 +22,7 @@ import {
 import type { Asset } from "../types/inventory";
 import type { Deployment, DeploymentStatus } from "../types/deployment";
 import { useConfirm } from "../components/ConfirmProvider";
+import EntityHistoryList from "../components/EntityHistoryList";
 import { AccentPill, Avatar, SectionHeader } from "../components/visual";
 import { friendlyModel } from "../utils/friendlyModel";
 
@@ -567,6 +568,8 @@ export default function DeploymentDetail({
           </ul>
         )}
       </div>
+
+      <EntityHistoryList entityType="deployment" entityId={deploymentId} />
     </div>
   );
 }

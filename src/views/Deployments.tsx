@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 
+import ExportDropdown from "../components/ExportDropdown";
 import Select from "../components/Select";
+import { StatTile, StatTileRow } from "../components/StatTile";
 import { listDeployments } from "../services/deployments";
+import { downloadDeploymentsExport } from "../services/exports";
 import type { Deployment, DeploymentStatus } from "../types/deployment";
 
 interface Props {
@@ -31,6 +34,8 @@ function statusBadgeClass(s: DeploymentStatus): string {
 
 export default function Deployments({ onSelect, onCreate }: Props) {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
+  // All active deployments (any status) — powers the stat tiles independent of filters.
+  const [allActive, setAllActive] = useState<Deployment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [q, setQ] = useState("");
@@ -55,18 +60,53 @@ export default function Deployments({ onSelect, onCreate }: Props) {
     void reload();
   }, [statusFilter, showArchived]);
 
+  // Stats over all active (non-archived) deployments, unaffected by filters.
+  useEffect(() => {
+    void listDeployments({ archived: false, limit: 500 })
+      .then(setAllActive)
+      .catch(() => setAllActive([]));
+  }, []);
+
+  const stats = {
+    total: allActive.length,
+    planning: allActive.filter((d) => d.status === "planning").length,
+    in_progress: allActive.filter((d) => d.status === "in_progress").length,
+    completed: allActive.filter((d) => d.status === "completed").length,
+  };
+
   return (
     <div className="stack-lg">
       <div className="cluster" style={{ justifyContent: "space-between" }}>
         <h2 className="heading-2">Deployments</h2>
-        <button
-          type="button"
-          className="btn btn-primary btn-sm"
-          onClick={onCreate}
-        >
-          New deployment
-        </button>
+        <div className="cluster" style={{ gap: "0.5rem" }}>
+          <ExportDropdown
+            entityName="deployments"
+            onExport={(fmt) =>
+              downloadDeploymentsExport(
+                {
+                  status_q: statusFilter || undefined,
+                  q: q || undefined,
+                },
+                fmt,
+              )
+            }
+          />
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={onCreate}
+          >
+            New deployment
+          </button>
+        </div>
       </div>
+
+      <StatTileRow>
+        <StatTile label="Active deployments" value={stats.total} tone="neutral" />
+        <StatTile label="Planning" value={stats.planning} tone="neutral" />
+        <StatTile label="In progress" value={stats.in_progress} tone="warning" />
+        <StatTile label="Completed" value={stats.completed} tone="success" />
+      </StatTileRow>
 
       <div className="toolbar">
         <input

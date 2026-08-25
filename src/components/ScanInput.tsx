@@ -30,6 +30,9 @@ interface Props {
   placeholder?: string;
   autoFocus?: boolean;
   label?: string;
+  /** Bump this number to imperatively re-focus + select the input — used by
+   *  batch intake to return the cursor to the scanner after each save. */
+  refocusToken?: number;
 }
 
 export default function ScanInput({
@@ -39,23 +42,36 @@ export default function ScanInput({
   placeholder = "Scan or type serial",
   autoFocus = true,
   label = "Serial number",
+  refocusToken,
 }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [showCamera, setShowCamera] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!autoFocus) return;
+  const skipAutoFocus = () => {
     // Skip auto-focus on touch / narrow viewports — pops the soft keyboard
     // before the user has a chance to pick Camera or Upload image.
-    if (typeof window !== "undefined") {
-      const isTouch = window.matchMedia("(pointer: coarse)").matches;
-      const isNarrow = window.matchMedia("(max-width: 639px)").matches;
-      if (isTouch || isNarrow) return;
-    }
+    if (typeof window === "undefined") return false;
+    return (
+      window.matchMedia("(pointer: coarse)").matches ||
+      window.matchMedia("(max-width: 639px)").matches
+    );
+  };
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    if (skipAutoFocus()) return;
     inputRef.current?.focus();
   }, [autoFocus]);
+
+  // Imperative re-focus for batch flows (refocusToken changes per save).
+  useEffect(() => {
+    if (refocusToken === undefined || refocusToken === 0) return;
+    if (skipAutoFocus()) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [refocusToken]);
 
   const accept = (text: string) => {
     onChange(text);
